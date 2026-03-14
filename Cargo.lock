@@ -1511,6 +1511,8 @@ name = "image_viewer"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "raw-window-handle",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

@@ -3,20 +3,134 @@ use crate::state::ViewerState;
 
 pub struct ImageApp {
     state: ViewerState,
+    #[cfg(windows)]
+    hwnd: Option<isize>,
 }
 
 impl ImageApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        #[cfg(windows)]
+        let hwnd = {
+            use raw_window_handle::HasWindowHandle;
+            let mut h = None;
+            if let Ok(handle) = cc.window_handle() {
+                if let raw_window_handle::RawWindowHandle::Win32(win32) = handle.as_raw() {
+                    let val = win32.hwnd.get();
+                    crate::win32::install_drag_subclass(val);
+                    h = Some(val);
+                }
+            }
+            h
+        };
+
         Self {
             state: ViewerState::new(),
+            #[cfg(windows)]
+            hwnd,
         }
+    }
+
+    // Helper function to draw the actual buttons and handle dragging
+    fn render_top_bar_content(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        // 1. Make the whole bar area draggable to move the window
+        let drag_response = ui.interact(ui.max_rect(), egui::Id::new("title_drag"), egui::Sense::drag());
+        if drag_response.drag_started() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+        }
+
+        ui.horizontal_centered(|ui| {
+            ui.add_space(8.0);
+            ui.label("Image Viewer");
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(8.0);
+
+                // Close Button
+                if ui.button("❌").clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+
+                // Immersive Toggle (Maximize + Hide Bar)
+                let icon = if self.state.is_fullscreen { "🗖" } else { "🗗" };
+                if ui.button(icon).clicked() {
+                    self.state.is_fullscreen = !self.state.is_fullscreen;
+                    // Maximize window when immersive, restore when windowed
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(self.state.is_fullscreen));
+                }
+
+                // Minimize Button (Only visible if not immersive)
+                if ui.button("🗕").clicked() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                }
+            });
+        });
     }
 }
 
 impl eframe::App for ImageApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        egui::CentralPanel::default().show(ctx, |_ui| {
-            // Blank screen, no UI elements for now
+
+        // 1. Ask the OS if the window is currently maximized
+    let is_currently_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+
+    // 2. Sync: If OS is maximized but our state is FALSE, set it to TRUE
+    // 3. Sync: If OS is NOT maximized but our state is TRUE, set it to FALSE
+    if is_currently_maximized != self.state.is_fullscreen {
+        self.state.is_fullscreen = is_currently_maximized;
+    }
+
+        // --- 1. Top Bar Rendering ---
+        if self.state.is_fullscreen {
+            // Immersive Mode: Only show as an overlay when mouse touches top
+            let near_top = match ctx.pointer_hover_pos() {
+                Some(pos) => pos.y < 34.0,
+                None => {
+                    // egui may not see the cursor when it's in the native HTCAPTION zone.
+                    // Fall back to querying the OS directly, but only if we have focus
+                    // (otherwise the cursor is outside the window entirely).
+                    #[cfg(windows)]
+                    {
+                        let has_focus = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+                        has_focus && self.hwnd.is_some_and(|h| {
+                            let y = crate::win32::get_cursor_client_y(h);
+                            y >= 0 && y < 34
+                        })
+                    }
+                    #[cfg(not(windows))]
+                    false
+                }
+            };
+            if near_top {
+                egui::Area::new(egui::Id::new("top_bar_overlay"))
+                    .fixed_pos(egui::pos2(0.0, 0.0))
+                    .order(egui::Order::Foreground)
+                    .show(ctx, |ui| {
+                        ui.set_width(ctx.content_rect().width());
+                        egui::Frame::menu(ui.style()).show(ui, |ui| {
+                            ui.set_height(22.0);
+                            self.render_top_bar_content(ui, ctx);
+                        });
+                    });
+            }
+        } else {
+            // Normal Mode: Fixed panel that pushes content down
+            egui::TopBottomPanel::top(egui::Id::new("custom_title_bar"))
+                .exact_height(32.0)
+                .show(ctx, |ui| {
+                    self.render_top_bar_content(ui, ctx);
+                });
+        }
+
+        // --- 2. Main Canvas ---
+        egui::CentralPanel::default().show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(20.0);
+                if self.state.is_fullscreen {
+                    ui.label("IMMERSE MODE: Hover at the top to see the bar.");
+                } else {
+                    ui.label("WINDOW MODE: The bar is fixed.");
+                }
+            });
         });
     }
 }
