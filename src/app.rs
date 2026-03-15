@@ -71,13 +71,13 @@ impl eframe::App for ImageApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
 
         // 1. Ask the OS if the window is currently maximized
-    let is_currently_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
+        let is_currently_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
 
-    // 2. Sync: If OS is maximized but our state is FALSE, set it to TRUE
-    // 3. Sync: If OS is NOT maximized but our state is TRUE, set it to FALSE
-    if is_currently_maximized != self.state.is_fullscreen {
-        self.state.is_fullscreen = is_currently_maximized;
-    }
+        // 2. Sync: If OS is maximized but our state is FALSE, set it to TRUE
+        // 3. Sync: If OS is NOT maximized but our state is TRUE, set it to FALSE
+        if is_currently_maximized != self.state.is_fullscreen {
+            self.state.is_fullscreen = is_currently_maximized;
+        }
 
         // --- 1. Top Bar Rendering ---
         if self.state.is_fullscreen {

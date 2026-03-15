@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 eframe = "0.33.3"
 raw-window-handle = "0.6"
+image = "0.25.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [
