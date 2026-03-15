@@ -132,5 +132,16 @@ impl eframe::App for ImageApp {
                 }
             });
         });
+
+        // --- 3. Window Border (windowed mode only) ---
+        if !self.state.is_fullscreen {
+            let painter = ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("window_border"),
+            ));
+            let stroke = ctx.style().visuals.window_stroke;
+            let rect = ctx.content_rect().shrink(stroke.width * 0.5);
+            painter.rect_stroke(rect, 8.0, stroke, egui::StrokeKind::Inside);
+        }
     }
 }
