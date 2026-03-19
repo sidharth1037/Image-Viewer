@@ -8,7 +8,17 @@ pub struct ImageApp {
 }
 
 impl ImageApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, initial_file: Option<String>) -> Self {
+
+        let mut state = ViewerState::new();
+
+        if let Some(path) = initial_file {
+            // For now, just extract the file name to show in the title bar
+            if let Some(name) = std::path::Path::new(&path).file_name() {
+                state.current_file_name = name.to_string_lossy().into_owned();
+            }
+        }
+
         #[cfg(windows)]
         let hwnd = {
             use raw_window_handle::HasWindowHandle;
@@ -24,7 +34,7 @@ impl ImageApp {
         };
 
         Self {
-            state: ViewerState::new(),
+            state,
             #[cfg(windows)]
             hwnd,
         }
@@ -40,7 +50,43 @@ impl ImageApp {
 
         ui.horizontal_centered(|ui| {
             ui.add_space(8.0);
-            ui.label("Image Viewer");
+            // compute raw title
+            let full_title = if self.state.current_file_name.is_empty() {
+                "Image Viewer".to_string()
+            } else {
+                self.state.current_file_name.clone()
+            };
+
+            // estimate reserved space for the right-side buttons (tweak if you change icons/layout)
+            let reserved_for_buttons: f32 = 120.0; // px
+
+            // available width for the title (never negative)
+            let avail_px = (ui.available_width() - reserved_for_buttons).max(0.0);
+
+            // average character width in your UI font (tweak for better fit)
+            let avg_char_px = 7.0_f32;
+
+            // compute max chars that can fit in available width
+            let max_chars = (avail_px / avg_char_px).floor() as usize;
+
+            // helper: keeps extension and returns original if it already fits
+            fn elide_keep_ext(name: &str, max_chars: usize) -> String {
+                if name.len() <= max_chars || max_chars < 5 {
+                    return name.to_string();
+                }
+                let path = std::path::Path::new(name);
+                let ext = path.extension().and_then(|s| s.to_str()).map(|s| format!(".{}", s));
+                let ext_len = ext.as_ref().map(|s| s.len()).unwrap_or(0);
+                let prefix_len = max_chars.saturating_sub(ext_len + 3).max(1);
+                let prefix: String = name.chars().take(prefix_len).collect();
+                match ext {
+                    Some(e) => format!("{}..{}", prefix, e),
+                    None => format!("{}...", prefix),
+                }
+            }
+
+            let shown = elide_keep_ext(&full_title, max_chars);
+            ui.label(shown);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(8.0);
