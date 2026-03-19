@@ -9,14 +9,23 @@ pub struct ImageApp {
 
 impl ImageApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial_file: Option<String>) -> Self {
+        
+        // 1. Pass the context cloned from cc to the loader
+        let (req_tx, res_rx) = crate::image_io::spawn_image_loader(cc.egui_ctx.clone());
+        
+        let mut state = ViewerState::new(req_tx, res_rx);
 
-        let mut state = ViewerState::new();
-
-        if let Some(path) = initial_file {
-            // For now, just extract the file name to show in the title bar
-            if let Some(name) = std::path::Path::new(&path).file_name() {
+        // 3. Handle the command line argument if it exists
+        if let Some(path_str) = initial_file {
+            let path = std::path::PathBuf::from(&path_str);
+            
+            // Extract the file name for the title bar
+            if let Some(name) = path.file_name() {
                 state.current_file_name = name.to_string_lossy().into_owned();
             }
+            
+            // Send the path to the background thread to start loading immediately
+            let _ = state.req_tx.send(path);
         }
 
         #[cfg(windows)]
@@ -70,7 +79,7 @@ impl ImageApp {
             let max_chars = (avail_px / avg_char_px).floor() as usize;
 
             // helper: keeps extension and returns original if it already fits
-            fn elide_keep_ext(name: &str, max_chars: usize) -> String {
+            fn trunc_with_ext(name: &str, max_chars: usize) -> String {
                 if name.len() <= max_chars || max_chars < 5 {
                     return name.to_string();
                 }
@@ -85,7 +94,7 @@ impl ImageApp {
                 }
             }
 
-            let shown = elide_keep_ext(&full_title, max_chars);
+            let shown = trunc_with_ext(&full_title, max_chars);
             ui.label(shown);
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -123,6 +132,30 @@ impl eframe::App for ImageApp {
         // 3. Sync: If OS is NOT maximized but our state is TRUE, set it to FALSE
         if is_currently_maximized != self.state.is_fullscreen {
             self.state.is_fullscreen = is_currently_maximized;
+        }
+
+        // --- 0. Receive Data from Background Thread ---
+        if let Ok(result) = self.state.res_rx.try_recv() {
+            match result {
+                Ok(loaded_image) => {
+                    // Convert raw RGBA bytes into an egui-compatible ColorImage
+                    let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                        [loaded_image.width as usize, loaded_image.height as usize],
+                        &loaded_image.pixels,
+                    );
+
+                    // Upload the image to the GPU and store the handle
+                    self.state.texture = Some(ctx.load_texture(
+                        "viewer_image",
+                        color_image,
+                        egui::TextureOptions::LINEAR, // Smooth scaling
+                    ));
+                }
+                Err(err) => {
+                    eprintln!("Failed to load image: {}", err);
+                    // (Optional) You could store this error in state to show it on screen later
+                }
+            }
         }
 
         // --- 1. Top Bar Rendering ---
@@ -168,16 +201,28 @@ impl eframe::App for ImageApp {
         }
 
         // --- 2. Main Canvas ---
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(20.0);
-                if self.state.is_fullscreen {
-                    ui.label("IMMERSE MODE: Hover at the top to see the bar.");
-                } else {
-                    ui.label("WINDOW MODE: The bar is fixed.");
-                }
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new()) // Removes default margins
+            .show(ctx, |ui| {
+                // Fill the background so it's a solid color
+                let rect = ui.max_rect();
+                ui.painter().rect_filled(rect, 0.0, ui.visuals().window_fill());
+
+                // Center everything inside this panel
+                ui.centered_and_justified(|ui| {
+                    if let Some(texture) = &self.state.texture {
+                        // We shrink it to fit the window while maintaining aspect ratio
+                        ui.add(egui::Image::new(texture).shrink_to_fit());
+                    } else {
+                        // If no texture is loaded yet, show what's happening
+                        if self.state.current_file_name.is_empty() {
+                            ui.label("No image loaded. Try 'Open With'...");
+                        } else {
+                            ui.spinner(); // Shows a loading animation
+                        }
+                    }
+                });
             });
-        });
 
         // --- 3. Window Border (windowed mode only) ---
         if !self.state.is_fullscreen {
