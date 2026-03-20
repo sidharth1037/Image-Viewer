@@ -25,9 +25,9 @@ impl ViewerState {
         Self {
             is_fullscreen: false,
             current_file_name: String::new(),
-            auto_fit: true,       // Start by automatically fitting the image to the window
+            auto_fit: true,       
             scale: 1.0,           
-            pan: Vec2::ZERO,      
+            pan: Vec2::ZERO,   
             texture: None,
             req_tx,
             res_rx,

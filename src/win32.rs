@@ -6,17 +6,20 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, WM_NCDESTROY, WM_NCHITTEST,
 };
 
-/// Width/height in pixels of the resize zone for edges.
+// Safely link the DWM API to avoid Cargo.toml feature flag headaches
+#[link(name = "dwmapi")]
+unsafe extern "system" {
+    pub fn DwmSetWindowAttribute(
+        hwnd: HWND,
+        dwattribute: u32,
+        pvattribute: *const core::ffi::c_void,
+        cbattribute: u32,
+    ) -> i32;
+}
+
 const RESIZE_BORDER: i32 = 10;
-
-/// Width/height in pixels of the resize zone for corners (larger for easier grabbing).
 const CORNER_BORDER: i32 = 14;
-
-/// Height in pixels of the invisible drag strip at the top of the window
-/// when maximized. This lets the OS handle dragging natively from the
-/// topmost screen edge, which egui cannot receive events for.
 const CAPTION_GRAB_HEIGHT: i32 = 10;
-
 const SUBCLASS_ID: usize = 1;
 
 unsafe extern "system" fn subclass_proc(
@@ -27,6 +30,11 @@ unsafe extern "system" fn subclass_proc(
     _uid_subclass: usize,
     _ref_data: usize,
 ) -> LRESULT {
+
+    // --- BORDERLESS DRAG & RESIZE ---
+    // Notice: We completely removed WM_SIZE, WM_NCACTIVATE, and WM_NCPAINT!
+    // We let the modern Windows DWM handle all drawing natively, eliminating flashes.
+
     if msg == WM_NCHITTEST {
         let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
         if result != HTCLIENT as LRESULT {
@@ -42,18 +50,15 @@ unsafe extern "system" fn subclass_proc(
         let is_maximized = unsafe { IsZoomed(hwnd) } != 0;
 
         if is_maximized {
-            // When maximized: only handle the caption grab strip at the top
             if pt.y < CAPTION_GRAB_HEIGHT {
                 return HTCAPTION as LRESULT;
             }
         } else {
-            // When windowed: handle resize from all edges and corners
             let mut rc = RECT { left: 0, top: 0, right: 0, bottom: 0 };
             unsafe { GetClientRect(hwnd, &mut rc) };
             let w = rc.right;
             let h = rc.bottom;
 
-            // Check corners first with larger hit zone
             let on_corner_left = pt.x < CORNER_BORDER;
             let on_corner_right = pt.x >= w - CORNER_BORDER;
             let on_corner_top = pt.y < CORNER_BORDER;
@@ -65,7 +70,6 @@ unsafe extern "system" fn subclass_proc(
                 (_, true, true, _) => HTTOPRIGHT,
                 (_, true, _, true) => HTBOTTOMRIGHT,
                 _ => {
-                    // Check edges with smaller hit zone
                     let on_left = pt.x < RESIZE_BORDER;
                     let on_right = pt.x >= w - RESIZE_BORDER;
                     let on_top = pt.y < RESIZE_BORDER;
@@ -93,18 +97,25 @@ unsafe extern "system" fn subclass_proc(
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }
 
-/// Install a window subclass that returns HTCAPTION for the top few pixels
-/// when maximized, enabling native drag from the screen edge.
 pub fn install_drag_subclass(hwnd: isize) {
     unsafe {
         SetWindowSubclass(hwnd as HWND, Some(subclass_proc), SUBCLASS_ID, 0);
+
+        // --- THE MODERN NATIVE FIX ---
+        // Tell the Windows 11 Desktop Window Manager to round the corners natively.
+        // This happens on the GPU, keeps your dropshadow, and NEVER flashes!
+        const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+        const DWMWCP_ROUND: u32 = 2; // 2 = Round, 3 = Small Round
+        
+        DwmSetWindowAttribute(
+            hwnd as HWND,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            &DWMWCP_ROUND as *const _ as *const core::ffi::c_void,
+            std::mem::size_of::<u32>() as u32,
+        );
     }
 }
 
-/// Query the cursor's Y position in client coordinates using the native API.
-/// Returns the Y value, or -1 if the query fails.
-/// This works even when the cursor is in the HTCAPTION zone where egui
-/// doesn't receive mouse events.
 pub fn get_cursor_client_y(hwnd: isize) -> i32 {
     unsafe {
         let mut pt = POINT { x: 0, y: 0 };
