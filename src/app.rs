@@ -209,19 +209,104 @@ impl eframe::App for ImageApp {
                 ui.painter().rect_filled(rect, 0.0, ui.visuals().window_fill());
 
                 // Center everything inside this panel
-                ui.centered_and_justified(|ui| {
-                    if let Some(texture) = &self.state.texture {
-                        // We shrink it to fit the window while maintaining aspect ratio
-                        ui.add(egui::Image::new(texture).shrink_to_fit());
+                if let Some(texture) = &self.state.texture {
+                    // 1. Allocate the entire canvas area to capture mouse inputs
+                    let canvas_size = ui.available_size();
+                    let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::drag());
+                    
+                    let image_size = texture.size_vec2();
+
+                    // --- STEP A: Calculate Fit Scale ---
+                    let scale_w = canvas_size.x / image_size.x;
+                    let scale_h = canvas_size.y / image_size.y;
+                    let fit_scale = scale_w.min(scale_h);
+
+                    // --- STEP B: Enforce Auto-Fit ---
+                    if self.state.auto_fit {
+                        self.state.scale = fit_scale;
+                        self.state.pan = egui::Vec2::ZERO;
+                    }
+
+                    // --- STEP C: Handle Zoom & Pan Inputs ---
+                    
+                    // 1. Zooming (Mouse Wheel)
+                    if response.hovered() {
+                        // THE FIX: Use egui's native smoothing instead of our custom animation loop
+                        let scroll = ctx.input(|i| i.smooth_scroll_delta.y); 
+
+                        if let Some(pointer_pos) = response.hover_pos() {
+                            self.state.auto_fit = false;
+
+                            // The continuous math perfectly scales the zoom to the speed of the wheel.
+                            // Tweak this 0.005 number if you want the wheel to feel heavier or lighter.
+                            let zoom_sensitivity = 0.005; 
+                            let zoom_multiplier = (scroll * zoom_sensitivity).exp();
+
+                            let old_scale = self.state.scale;
+                            let mut new_scale = old_scale * zoom_multiplier;
+
+                            // THE BOUNCE FIX: Never let the scale shrink past the window bounds
+                            new_scale = new_scale.max(fit_scale);
+
+                            // --- Zoom Towards Cursor Math ---
+                            let canvas_center = response.rect.center();
+                            let pointer_offset = pointer_pos - canvas_center;
+                            let scale_ratio = new_scale / old_scale;
+                            
+                            self.state.pan -= (pointer_offset - self.state.pan) * (scale_ratio - 1.0);
+                            self.state.scale = new_scale;
+                        }
+                    }
+
+                    let is_zoomed_in = self.state.scale > fit_scale * 1.001;
+
+                    // 2. Panning (Click & Drag)
+                    if is_zoomed_in {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                        
+                        if response.dragged_by(egui::PointerButton::Primary) {
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                            self.state.auto_fit = false;
+                            self.state.pan += response.drag_delta();
+                        }
+                    }
+
+                    // --- STEP D: The Clamp / Overtake ---
+                    if !is_zoomed_in {
+                        // Snap back to perfectly centered fit if zoomed out
+                        self.state.scale = fit_scale;
+                        self.state.auto_fit = true;
+                        self.state.pan = egui::Vec2::ZERO;
                     } else {
-                        // If no texture is loaded yet, show what's happening
+                        // SMART CLAMPING
+                        let scaled_size = image_size * self.state.scale;
+                        let max_pan_x = ((scaled_size.x - canvas_size.x) / 2.0).max(0.0);
+                        let max_pan_y = ((scaled_size.y - canvas_size.y) / 2.0).max(0.0);
+                        
+                        self.state.pan.x = self.state.pan.x.clamp(-max_pan_x, max_pan_x);
+                        self.state.pan.y = self.state.pan.y.clamp(-max_pan_y, max_pan_y);
+                    }
+
+                    // --- STEP E: Draw the Image ---
+                    let scaled_size = image_size * self.state.scale;
+                    let center_offset = (canvas_size - scaled_size) / 2.0;
+                    
+                    let image_top_left = response.rect.min + center_offset + self.state.pan;
+                    let draw_rect = egui::Rect::from_min_size(image_top_left, scaled_size);
+
+                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                    painter.image(texture.id(), draw_rect, uv, egui::Color32::WHITE);
+
+                } else {
+                    // If no texture is loaded yet, show what's happening
+                    ui.centered_and_justified(|ui| {
                         if self.state.current_file_name.is_empty() {
                             ui.label("No image loaded. Try 'Open With'...");
                         } else {
-                            ui.spinner(); // Shows a loading animation
+                            ui.spinner();
                         }
-                    }
-                });
+                    });
+                }
             });
 
         // --- 3. Window Border (windowed mode only) ---
