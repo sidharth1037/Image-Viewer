@@ -53,14 +53,30 @@ pub fn spawn_image_loader(
                 // 1. Instantly read file bytes into RAM
                 let file_bytes = std::fs::read(&path)?;
                 
-                // 2. Determine format routing via extension
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                // 2. Determine format routing via MAGIC BYTES instead of extension
+                let ext_fallback = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                
+                let format_str = if file_bytes.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+                    "png"
+                } else if file_bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                    "jpg"
+                } else if file_bytes.starts_with(b"RIFF") && file_bytes.len() >= 12 && &file_bytes[8..12] == b"WEBP" {
+                    "webp"
+                } else if file_bytes.starts_with(b"GIF8") {
+                    "gif"
+                } else if file_bytes.len() >= 12 && &file_bytes[4..12] == b"ftypavif" {
+                    "avif"
+                } else if file_bytes.starts_with(&[0xFF, 0x0A]) || file_bytes.starts_with(&[0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L']) {
+                    "jxl"
+                } else {
+                    ext_fallback.as_str() // Fallback to extension if magic bytes are unknown
+                };
 
                 // 3. Decode bytes using the most optimal crate available
-                let (width, height, frames) = match ext.as_str() {
+                let (width, height, frames) = match format_str {
                     
                     "webp" => {
-                        // Native C-Library Binding
+                        // Native C-Library Binding (webp crate)
                         let decoder = webp::Decoder::new(&file_bytes);
                         let webp_img = decoder.decode().ok_or("Failed to decode WebP")?;
                         

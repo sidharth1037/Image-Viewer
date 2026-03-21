@@ -136,6 +136,12 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
                             });
                         }
                     } else {
+                        // --- THE FIX: PREVENT ASYNC RACE CONDITIONS ---
+                        // Immediately invalidate the old folder's state
+                        app.state.current_folder = Some(parent.to_path_buf());
+                        app.state.playlist.clear(); 
+                        app.state.current_index = 0;
+
                         let _ = app.state.dir_req_tx.send(crate::scanner::ScanRequest {
                             target_path: path.clone(),
                             sort_method: app.state.sort_method,

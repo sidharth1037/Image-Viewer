@@ -198,11 +198,25 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
             ctx.set_style(old_style);
 
+            // If the user picked a new method, instantly trigger a background rescan
             if sort_changed {
-                if !app.state.playlist.is_empty() {
-                    let current_path = app.state.playlist[app.state.current_index].clone();
+                // Determine the target path safely, even if the playlist is currently empty
+                let target = if !app.state.playlist.is_empty() {
+                    Some(app.state.playlist[app.state.current_index].clone())
+                } else if let Some(folder) = &app.state.current_folder {
+                    if !app.state.current_file_name.is_empty() {
+                        Some(folder.join(&app.state.current_file_name))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Send the new sort request
+                if let Some(path) = target {
                     let _ = app.state.dir_req_tx.send(crate::scanner::ScanRequest {
-                        target_path: current_path,
+                        target_path: path,
                         sort_method: app.state.sort_method,
                     });
                 }

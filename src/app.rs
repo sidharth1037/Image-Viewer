@@ -92,8 +92,7 @@ impl eframe::App for ImageApp {
         
         // 2. Render UI Layers
         ui::topbar::render(self, ctx);
-        ui::settings::render(self, ctx);
-        
+        ui::settings::render(self, ctx); 
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
             .show(ctx, |ui| {
@@ -116,7 +115,7 @@ impl eframe::App for ImageApp {
             
             let stroke = egui::Stroke::new(1.0, stroke_color);
             
-            // Align to pixel grid for maximum sharpness
+            // Align to pixel grid for visual quality
             let mut rect = ctx.content_rect().shrink(stroke.width);
             rect.max.x -= 0.5; 
             rect.max.y -= 0.5;
