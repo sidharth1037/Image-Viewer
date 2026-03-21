@@ -6,6 +6,8 @@ mod state;
 mod app;
 mod image_io;
 mod scanner;
+mod ui;
+mod handlers;
 #[cfg(windows)]
 mod win32;
 
@@ -30,6 +32,12 @@ fn main() -> eframe::Result<()> {
         options,
         // This is a closure (lambda). It creates the app instance.
         // Box::new puts our app on the Heap memory.
-        Box::new(|cc| Ok(Box::new(ImageApp::new(cc, initial_file)))),
+        Box::new(|cc| {
+            let mut fonts = eframe::egui::FontDefinitions::default();
+            egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+            cc.egui_ctx.set_fonts(fonts);
+
+            Ok(Box::new(ImageApp::new(cc, initial_file)))
+        }),
     )
 }
