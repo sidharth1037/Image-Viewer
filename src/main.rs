@@ -22,7 +22,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([640.0, 480.0])
-            .with_min_inner_size([300.0, 300.0]) // Set minimum resize limit
+            .with_min_inner_size([450.0, 450.0]) // Set minimum resize limit
             .with_decorations(false),
         ..Default::default() // Use default values for the rest of the config
     };

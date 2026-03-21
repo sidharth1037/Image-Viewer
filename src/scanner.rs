@@ -1,12 +1,14 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-// --- NEW: Extensible Sorting Configuration ---
+// --- Extensible Sorting Configuration ---
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum SortMethod {
-    Lexical,
-    Size,         // Placeholder for future
-    DateModified, // Placeholder for future
+    Alphabetical, 
+    Natural,      
+    Size,         
+    DateModified, 
+    DateCreated,  // <-- NEW
 }
 
 pub struct ScanRequest {
@@ -20,7 +22,6 @@ pub struct DirectoryState {
     pub current_index: usize,
 }
 
-// Note the channel now takes ScanRequest instead of PathBuf
 pub fn spawn_directory_scanner() -> (Sender<ScanRequest>, Receiver<DirectoryState>) {
     let (req_tx, req_rx) = channel::<ScanRequest>();
     let (res_tx, res_rx) = channel::<DirectoryState>();
@@ -28,7 +29,6 @@ pub fn spawn_directory_scanner() -> (Sender<ScanRequest>, Receiver<DirectoryStat
     std::thread::spawn(move || {
         let valid_exts = ["webp", "avif", "jxl", "png", "jpg", "jpeg", "gif", "tif", "tiff", "bmp", "ico"];
 
-        // Listen for the new structured request
         while let Ok(request) = req_rx.recv() {
             if let Some(folder) = request.target_path.parent() {
                 let mut playlist = Vec::new();
@@ -46,9 +46,16 @@ pub fn spawn_directory_scanner() -> (Sender<ScanRequest>, Receiver<DirectoryStat
                     }
                 }
 
-                // --- NEW: Strategy Routing based on Enum ---
+                // --- Strategy Routing based on Enum ---
                 match request.sort_method {
-                    SortMethod::Lexical => {
+                    SortMethod::Alphabetical => {
+                        playlist.sort_by(|a, b| {
+                            let name_a = a.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                            let name_b = b.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                            name_a.cmp(&name_b)
+                        });
+                    }
+                    SortMethod::Natural => {
                         playlist.sort_by(|a, b| {
                             let name_a = a.file_name().unwrap_or_default().to_string_lossy();
                             let name_b = b.file_name().unwrap_or_default().to_string_lossy();
@@ -56,12 +63,25 @@ pub fn spawn_directory_scanner() -> (Sender<ScanRequest>, Receiver<DirectoryStat
                         });
                     }
                     SortMethod::Size => {
-                        // TODO: Implement metadata size sorting
-                        println!("Size sorting not yet implemented, falling back to Lexical.");
+                        // sort_by_cached_key prevents excessive disk I/O
+                        playlist.sort_by_cached_key(|k| {
+                            std::fs::metadata(k).map(|m| m.len()).unwrap_or(0)
+                        });
                     }
                     SortMethod::DateModified => {
-                        // TODO: Implement metadata date sorting
-                        println!("Date sorting not yet implemented, falling back to Lexical.");
+                        playlist.sort_by_cached_key(|k| {
+                            std::fs::metadata(k)
+                                .and_then(|m| m.modified())
+                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                        });
+                    }
+                    SortMethod::DateCreated => {
+                        playlist.sort_by_cached_key(|k| {
+                            std::fs::metadata(k)
+                                // Some OS/Filesystems don't support created(), fallback to modified
+                                .and_then(|m| m.created().or_else(|_| m.modified()))
+                                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+                        });
                     }
                 }
 

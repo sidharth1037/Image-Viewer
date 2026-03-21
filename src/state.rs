@@ -68,7 +68,7 @@ impl ViewerState {
             current_folder: None,
             playlist: Vec::new(),
             current_index: 0,
-            sort_method: crate::scanner::SortMethod::Lexical, // Default sorting
+            sort_method: crate::scanner::SortMethod::Natural, // Default sorting
             dir_req_tx,
             dir_res_rx,
         }

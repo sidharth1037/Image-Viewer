@@ -4,11 +4,10 @@ use egui_phosphor::regular as icons;
 
 pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
     // --- SETTINGS INTEGRATION ---
-    // Should we auto-hide the bar, or keep it permanently visible?
     let is_immersive = app.state.is_fullscreen && app.settings.immersive_maximized;
 
     if is_immersive {
-        let near_top = match ctx.pointer_hover_pos() {
+        let mut near_top = match ctx.pointer_hover_pos() {
             Some(pos) => pos.y < 34.0,
             None => {
                 #[cfg(windows)]
@@ -22,6 +21,13 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                 false
             }
         };
+
+        // --- THE FIX: KEEP OPEN IF DROPDOWN IS ACTIVE ---
+        // If the user has clicked the combo box, egui registers a popup.
+        // We force the top bar to stay visible until they click away.
+        if egui::Popup::is_any_open(ctx) {
+            near_top = true;
+        }
 
         if near_top {
             egui::Area::new(egui::Id::new("top_bar_overlay"))
@@ -45,7 +51,6 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             ctx.style().visuals.window_stroke.color.gamma_multiply(0.4)
         };
 
-        // --- THE FIX: Dim the line when maximized instead of hiding it ---
         if app.state.is_fullscreen {
             current_color = current_color.gamma_multiply(0.4);
         }
@@ -64,7 +69,6 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                 render_content(app, ui, ctx);
             });
 
-        // Draw it unconditionally now, trusting our dimming math above
         let rect = panel_res.response.rect;
         ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("title_line")))
             .hline(rect.x_range(), rect.bottom(), panel_stroke);
@@ -80,7 +84,9 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     ui.horizontal_centered(|ui| {
         ui.add_space(8.0);
         
-        let reserved_for_buttons: f32 = 120.0; 
+        // --- THE FIX: PREVENT TITLE OVERLAP ---
+        // Increased from 120.0 to 280.0 to account for the ComboBox and Settings button
+        let reserved_for_buttons: f32 = 280.0; 
         let avail_px = (ui.available_width() - reserved_for_buttons).max(0.0);
 
         if (app.last_title_width - avail_px).abs() > 5.0 || app.cached_title.is_empty() {
@@ -113,19 +119,16 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);
-            // --- Close Button with Custom Red Hover ---
+            
             let close_btn = egui::Button::new(icons::X);
             let close_res = ui.add(close_btn);
 
             if close_res.hovered() {
-                // Apply a muted red background when hovered
-                // Color32::from_rgb(180, 50, 50) is a "not too bright" professional red
                 ui.painter().rect_filled(
                     close_res.rect, 
                     ui.style().visuals.widgets.hovered.corner_radius, 
                     egui::Color32::from_rgb(210, 43, 43)
                 );
-                // Re-paint the icon on top of the red background so it remains visible
                 ui.painter().text(
                     close_res.rect.center(),
                     egui::Align2::CENTER_CENTER,
@@ -139,24 +142,70 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             
-            // Maximize/Restore Toggle
             let icon = if app.state.is_fullscreen { icons::CORNERS_IN } else { icons::CORNERS_OUT };
             if ui.button(icon).clicked() {
                 app.state.is_fullscreen = !app.state.is_fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(app.state.is_fullscreen));
             }
 
-            // Minimize Button
             if ui.button(icons::MINUS).clicked() { 
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)); 
             }
             
             ui.add_space(12.0); 
             
-            // Settings Button using Phosphor Gear
             let settings_btn = egui::Button::new(icons::GEAR_SIX).selected(app.show_settings_window);
             if ui.add(settings_btn).clicked() {
                 app.show_settings_window = !app.show_settings_window; 
+            }
+
+            ui.add_space(8.0);
+
+            // --- Sorting Dropdown ---
+            let mut sort_changed = false;
+            
+            let sort_label = match app.state.sort_method {
+                crate::scanner::SortMethod::Alphabetical => format!("{} Alphabetical", icons::SORT_ASCENDING),
+                crate::scanner::SortMethod::Natural => format!("{} Natural", icons::SORT_ASCENDING),
+                crate::scanner::SortMethod::Size => format!("{} Size", icons::ARROWS_DOWN_UP),
+                crate::scanner::SortMethod::DateModified => format!("{} Modified", icons::CLOCK),
+                crate::scanner::SortMethod::DateCreated => format!("{} Created", icons::CALENDAR_PLUS),
+            };
+
+            let old_style = ctx.style().clone();
+            
+            ctx.style_mut(|style| {
+                style.visuals.window_fill = egui::Color32::TRANSPARENT;
+                style.visuals.window_stroke = egui::Stroke::NONE;
+                style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
+                style.spacing.menu_margin = egui::Margin::same(0);    
+            });
+
+            egui::ComboBox::from_id_salt("sort_combo_box")
+                .selected_text(sort_label)
+                .width(110.0) 
+                .show_ui(ui, |ui| {
+                    ui.add_space(14.0);
+                    
+                    egui::Frame::menu(&old_style).show(ui, |ui| {
+                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Alphabetical, "Name (Alphabetical)").changed();
+                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Natural, "Name (Natural)").changed();
+                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Size, "Size").changed();
+                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::DateModified, "Date Modified").changed();
+                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::DateCreated, "Date Created").changed();
+                    });
+                });
+
+            ctx.set_style(old_style);
+
+            if sort_changed {
+                if !app.state.playlist.is_empty() {
+                    let current_path = app.state.playlist[app.state.current_index].clone();
+                    let _ = app.state.dir_req_tx.send(crate::scanner::ScanRequest {
+                        target_path: current_path,
+                        sort_method: app.state.sort_method,
+                    });
+                }
             }
         });
     });
