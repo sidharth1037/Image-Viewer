@@ -8,7 +8,7 @@ pub struct LoadedImage {
     pub pixels: Vec<u8>,
 }
 
-// Helper function to quickly pad 3-channel RGB to 4-channel RGBA (used for WebP)
+// Helper function to quickly pad 3-channel RGB to 4-channel RGBA
 fn pad_rgb_to_rgba(rgb_pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
     let mut rgba_pixels = Vec::with_capacity((width * height * 4) as usize);
     for chunk in rgb_pixels.chunks_exact(3) {
@@ -53,6 +53,7 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                         let h = webp_img.height();
                         let mut px = webp_img.to_vec(); 
                         
+                        // Check if padding to RGBA is necessary
                         if px.len() == (w * h * 3) as usize {
                             let pad_start = std::time::Instant::now();
                             px = pad_rgb_to_rgba(&px, w, h);
@@ -62,9 +63,89 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                         }
                         (w, h, px)
                     }
+
+                    "avif" => {
+                        // --- NATIVE AVIF DECODER (using dav1d via libavif) ---
+                        let decode_start = std::time::Instant::now();
+                        
+                        let dynamic_img = libavif_image::read(&file_bytes)
+                            .map_err(|e| format!("AVIF Decode Error: {}", e))?;
+                        
+                        let w = dynamic_img.width();
+                        let h = dynamic_img.height();
+                        
+                        // Safely extract the raw RGBA pixels
+                        let px = dynamic_img.into_rgba8().into_raw();
+                        
+                        println!("[AVIF] Native libavif Decoding took: {:?}", decode_start.elapsed());
+                        (w, h, px)
+                    }
+
+                    "jxl" => {
+                        // --- PURE RUST JPEG XL (jxl-oxide) ---
+                        let decode_start = std::time::Instant::now();
+                        
+                        let jxl_decoder = jxl_oxide::integration::JxlDecoder::new(std::io::Cursor::new(&file_bytes))
+                            .map_err(|e| format!("JXL Error: {}", e))?;
+                            
+                        // Bridge the JXL decoder with the standard image crate
+                        let dynamic_img = image::DynamicImage::from_decoder(jxl_decoder)
+                            .map_err(|e| format!("JXL Dynamic Image Error: {}", e))?;
+                            
+                        let w = dynamic_img.width();
+                        let h = dynamic_img.height();
+                        
+                        // Safely extract the raw RGBA pixels
+                        let px = dynamic_img.into_rgba8().into_raw();
+                        
+                        println!("[JXL] Pure Rust jxl-oxide Decoding took: {:?}", decode_start.elapsed());
+                        (w, h, px)
+                    }
+
+                    "png" => {
+                        // --- FAST SIMD ACCELERATION FOR PNG (zune-png 0.5+) ---
+                        let decode_start = std::time::Instant::now();
+                        use zune_png::PngDecoder;
+                        use zune_jpeg::zune_core::bytestream::ZCursor;
+                        use zune_jpeg::zune_core::result::DecodingResult;
+                        
+                        // 1. Wrap the bytes in a ZCursor
+                        let cursor = ZCursor::new(&file_bytes);
+                        let mut decoder = PngDecoder::new(cursor);
+                        
+                        // 2. Decode headers and get info
+                        decoder.decode_headers().map_err(|e| format!("PNG Header Error: {:?}", e))?;
+                        let info = decoder.info().ok_or("Failed to get PNG info")?;
+                        
+                        let w = info.width as u32;
+                        let h = info.height as u32;
+                        
+                        // 3. Decode returns an enum (DecodingResult) to handle 8-bit vs 16-bit
+                        let decoded_enum = decoder.decode().map_err(|e| format!("PNG Decode Error: {:?}", e))?;
+                        println!("[PNG] Zune SIMD Decoding took: {:?}", decode_start.elapsed());
+
+                        // 4. Safely extract the Vec<u8> based on the bit depth
+                        let mut px = match decoded_enum {
+                            DecodingResult::U8(data) => data,
+                            DecodingResult::U16(data) => {
+                                // If it's a 16-bit PNG, quickly downsample to 8-bit for egui
+                                data.into_iter().map(|v| (v >> 8) as u8).collect()
+                            },
+                            _ => return Err("Unsupported PNG bit depth (Not 8 or 16-bit)".into()),
+                        };
+
+                        // 5. Pad RGB (3 channels) to RGBA (4 channels) if necessary
+                        if px.len() == (w * h * 3) as usize {
+                            let pad_start = std::time::Instant::now();
+                            px = pad_rgb_to_rgba(&px[..], w, h);
+                            println!("[PNG] RGB to RGBA padding took: {:?}", pad_start.elapsed());
+                        }
+
+                        (w, h, px)
+                    }
                     
                     "jpg" | "jpeg" => {
-                        // --- FAST SIMD ACCELERATION FOR JPEG (zune_jpeg 0.5+) ---
+                        // --- FAST SIMD ACCELERATION FOR JPEG ---
                         let decode_start = std::time::Instant::now();
                         use zune_jpeg::zune_core::options::DecoderOptions;
                         use zune_jpeg::zune_core::colorspace::ColorSpace;
@@ -74,7 +155,6 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                         let options = DecoderOptions::default()
                             .jpeg_set_out_colorspace(ColorSpace::RGBA);
                             
-                        // The 0.5.x API requires wrapping the bytes in a ZCursor for fast memory streaming
                         let cursor = ZCursor::new(&file_bytes);
                         
                         let mut decoder = zune_jpeg::JpegDecoder::new_with_options(cursor, options);
@@ -84,7 +164,7 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                         let w = info.width as u32;
                         let h = info.height as u32;
                         
-                        // This now natively returns a Vec<u8> in RGBA format
+                        // Natively returns a Vec<u8> in RGBA format
                         let px = decoder.decode()?; 
                         println!("[JPEG] Zune SIMD Decoding (Direct to RGBA) took: {:?}", decode_start.elapsed());
                         
@@ -92,7 +172,7 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                     }
                     
                     _ => {
-                        // --- FALLBACK FOR PNG, GIF, BMP, TIFF, ETC ---
+                        // --- FALLBACK FOR GIF, BMP, TIFF, ICO, ETC ---
                         let decode_start = std::time::Instant::now();
                         let img = image::load_from_memory(&file_bytes)?;
                         println!("[Fallback] Standard Rust Decoding took: {:?}", decode_start.elapsed());

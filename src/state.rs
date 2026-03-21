@@ -11,9 +11,11 @@ pub struct ViewerState {
     pub auto_fit: bool,   // Toggles between "fit to window" and "free zoom/pan"
     pub scale: f32,       // 1.0 = 100%, 2.0 = 200%, etc.
     pub pan: Vec2,        // The X/Y offset of the image from the center
+    pub reset_start_time: Option<f64>, // Stores the timestamp when double-click happened
 
     // --- Image Data ---
     pub texture: Option<TextureHandle>,
+    pub load_error: Option<String>,
     
     // --- Communication Channels ---
     pub req_tx: Sender<PathBuf>,
@@ -27,8 +29,10 @@ impl ViewerState {
             current_file_name: String::new(),
             auto_fit: true,       
             scale: 1.0,           
-            pan: Vec2::ZERO,   
+            pan: Vec2::ZERO,  
+            reset_start_time: None, 
             texture: None,
+            load_error: None,
             req_tx,
             res_rx,
         }

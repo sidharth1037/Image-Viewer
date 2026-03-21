@@ -65,20 +65,48 @@ impl ImageApp {
     // --- HELPER: Background Image Loading ---
     fn process_image_loading(&mut self, ctx: &egui::Context) {
         if let Ok(result) = self.state.res_rx.try_recv() {
-            if let Ok(loaded_image) = result {
-                let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                    [loaded_image.width as usize, loaded_image.height as usize],
-                    &loaded_image.pixels,
-                );
-                self.state.texture = Some(ctx.load_texture(
-                    "viewer_image",
-                    color_image,
-                    egui::TextureOptions::LINEAR,
-                ));
-            } else if let Err(err) = result {
-                eprintln!("Failed to load image: {}", err);
+            match result {
+                Ok(loaded_image) => {
+                    let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                        [loaded_image.width as usize, loaded_image.height as usize],
+                        &loaded_image.pixels,
+                    );
+                    self.state.texture = Some(ctx.load_texture(
+                        "viewer_image",
+                        color_image,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                    self.state.load_error = None; // Clear any previous errors
+                }
+                Err(err) => {
+                    self.state.texture = None; // Clear the bad texture
+                    self.state.load_error = Some(format!("Unsupported or invalid file:\n{}", err));
+                }
             }
         }
+    }
+
+    // --- HELPER: Drag and Drop ---
+    fn handle_drag_and_drop(&mut self, ctx: &egui::Context) {
+        // eframe automatically queues dropped files in the input state
+        ctx.input(|i| {
+            if let Some(dropped_file) = i.raw.dropped_files.first() {
+                if let Some(path) = &dropped_file.path {
+                    
+                    // 1. Update title bar
+                    if let Some(name) = path.file_name() {
+                        self.state.current_file_name = name.to_string_lossy().into_owned();
+                    }
+                    
+                    // 2. Wipe the current image/errors to show the loading spinner immediately
+                    self.state.texture = None;
+                    self.state.load_error = None;
+                    
+                    // 3. Send the new file to the background thread
+                    let _ = self.state.req_tx.send(path.clone());
+                }
+            }
+        });
     }
 
     // --- HELPER: Top Bar & Controls ---
@@ -224,98 +252,136 @@ impl ImageApp {
     }
 
     // --- HELPER: Image Canvas & Math ---
-    fn render_main_canvas(&mut self, ctx: &egui::Context) {
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new()) // Removes default margins
-            .show(ctx, |ui| {
-                // Fill the background so it's a solid color
-                let rect = ui.max_rect();
-                ui.painter().rect_filled(rect, 0.0, ui.visuals().window_fill());
+    fn render_main_canvas(&mut self, ctx: &egui::Context, ui: &mut egui::Ui) {
 
-                // Center everything inside this panel
-                if let Some(texture) = &self.state.texture {
-                    // Allocate the entire canvas area to capture mouse inputs
-                    let canvas_size = ui.available_size();
-                    let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::click_and_drag());
-                    let image_size = texture.size_vec2();
+        // Fill the background so it's a solid color
+        let rect = ui.max_rect();
+        ui.painter().rect_filled(rect, 0.0, ui.visuals().window_fill());
 
-                    // Calculate Fit Scale
-                    let scale_w = canvas_size.x / image_size.x;
-                    let scale_h = canvas_size.y / image_size.y;
-                    let fit_scale = scale_w.min(scale_h);
+        // Center everything inside this panel
+        if let Some(texture) = &self.state.texture {
+            // Allocate the entire canvas area to capture mouse inputs
+            let canvas_size = ui.available_size();
+            let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::click_and_drag());
+            let image_size = texture.size_vec2();
 
-                    // Enforce Auto-Fit
-                    if self.state.auto_fit {
-                        self.state.scale = fit_scale;
-                        self.state.pan = egui::Vec2::ZERO;
-                    }
+            // Calculate Fit Scale
+            let scale_w = canvas_size.x / image_size.x;
+            let scale_h = canvas_size.y / image_size.y;
+            let fit_scale = scale_w.min(scale_h);
 
-                    // Handle Zoom & Pan Inputs
-                    if response.hovered() {
-                        let scroll = ctx.input(|i| i.smooth_scroll_delta.y); 
-                        if let Some(pointer_pos) = response.hover_pos() {
-                            self.state.auto_fit = false;
+            // Enforce Auto-Fit
+            if self.state.auto_fit {
+                self.state.scale = fit_scale;
+                self.state.pan = egui::Vec2::ZERO;
+            }
 
-                            // The continuous math perfectly scales the zoom to the speed of the wheel.
-                            // Tweak this 0.005 number if you want the wheel to feel heavier or lighter.
-                            let zoom_multiplier = (scroll * 0.005).exp();
-                            let old_scale = self.state.scale;
-                            // THE BOUNCE FIX: Never let the scale shrink past the window bounds
-                            let new_scale = (old_scale * zoom_multiplier).max(fit_scale);
 
-                            // Zoom Towards Cursor Math
-                            let canvas_center = response.rect.center();
-                            let pointer_offset = pointer_pos - canvas_center;
-                            let scale_ratio = new_scale / old_scale;
-                            
-                            self.state.pan -= (pointer_offset - self.state.pan) * (scale_ratio - 1.0);
-                            self.state.scale = new_scale;
-                        }
-                    }
+            // --- 1. DETECT TRIGGER ---
+            if response.double_clicked() {
+                // Record the time the animation started
+                self.state.reset_start_time = Some(ui.input(|i| i.time));
+                self.state.auto_fit = false;
+            }
 
-                    let is_zoomed_in = self.state.scale > fit_scale * 1.001;
+            // --- 2. ANIMATION LOGIC ---
+            if let Some(start_time) = self.state.reset_start_time {
+                let current_time = ui.input(|i| i.time);
+                let elapsed = (current_time - start_time) as f32;
+                let duration = 0.35; // 350ms is the "sweet spot" for UI snappiness
 
-                    // Panning (Click & Drag)
-                    if is_zoomed_in {
-                        if response.dragged_by(egui::PointerButton::Primary) {
-                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                            self.state.auto_fit = false;
-                            self.state.pan += response.drag_delta();
-                        }
+                // Normalized time (0.0 to 1.0)
+                let t = (elapsed / duration).clamp(0.0, 1.0);
+
+                // Lerp Scale: Current = Start + (Target - Start) * Ease
+                // Note: We don't need to store the "Start Scale" because we can 
+                // effectively move the current scale towards fit_scale using the factor.
+                let lerp_factor = 0.25; // Adjust for "stickiness"
+                self.state.scale += (fit_scale - self.state.scale) * lerp_factor;
+                self.state.pan += (egui::Vec2::ZERO - self.state.pan) * lerp_factor;
+
+                // --- 3. THE "BLOCKING" HAND-OFF ---
+                // If we are very close to the target or time is up, snap and release
+                if t >= 1.0 || ((fit_scale - self.state.scale).abs() < 0.001 && self.state.pan.length() < 0.1) {
+                    self.state.scale = fit_scale;
+                    self.state.pan = egui::Vec2::ZERO;
+                    self.state.reset_start_time = None;
+                    self.state.auto_fit = true;
+                }
+
+                // Keep the UI thread alive at max refresh rate during the animation
+                ctx.request_repaint();
+
+            } else {
+                // Handle Zoom & Pan Inputs
+                if response.hovered() {
+                    let scroll = ctx.input(|i| i.smooth_scroll_delta.y); 
+                    if let Some(pointer_pos) = response.hover_pos() {
+                        self.state.auto_fit = false;
+
+                        // The continuous math perfectly scales the zoom to the speed of the wheel.
+                        // Tweak this 0.005 number if you want the wheel to feel heavier or lighter.
+                        let zoom_multiplier = (scroll * 0.005).exp();
+                        let old_scale = self.state.scale;
+                        // THE BOUNCE FIX: Never let the scale shrink past the window bounds
+                        let new_scale = (old_scale * zoom_multiplier).max(fit_scale);
+
+                        // Zoom Towards Cursor Math
+                        let canvas_center = response.rect.center();
+                        let pointer_offset = pointer_pos - canvas_center;
+                        let scale_ratio = new_scale / old_scale;
                         
-                        // The Clamp / Overtake Fix: When zoomed in, allow panning just a bit beyond the edges for a more natural feel
-                        // But then clamp it so you can never pan the image completely out of view.
-                        let scaled_size = image_size * self.state.scale;
-                        let max_pan_x = ((scaled_size.x - canvas_size.x) / 2.0).max(0.0);
-                        let max_pan_y = ((scaled_size.y - canvas_size.y) / 2.0).max(0.0);
-                        
-                        self.state.pan.x = self.state.pan.x.clamp(-max_pan_x, max_pan_x);
-                        self.state.pan.y = self.state.pan.y.clamp(-max_pan_y, max_pan_y);
-                    } else {
-                        self.state.scale = fit_scale;
-                        self.state.auto_fit = true;
-                        self.state.pan = egui::Vec2::ZERO;
+                        self.state.pan -= (pointer_offset - self.state.pan) * (scale_ratio - 1.0);
+                        self.state.scale = new_scale;
                     }
+                }
 
-                    // Draw the Image
-                    let scaled_size = image_size * self.state.scale;
-                    let center_offset = (canvas_size - scaled_size) / 2.0;
-                    let image_top_left = response.rect.min + center_offset + self.state.pan;
-                    let draw_rect = egui::Rect::from_min_size(image_top_left, scaled_size);
-                    let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                let is_zoomed_in = self.state.scale > fit_scale * 1.001;
+
+                // Panning (Click & Drag)
+                if is_zoomed_in {
+                    if response.dragged_by(egui::PointerButton::Primary) {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        self.state.auto_fit = false;
+                        self.state.pan += response.drag_delta();
+                    }
                     
-                    painter.image(texture.id(), draw_rect, uv, egui::Color32::WHITE);
+                    // The Clamp / Overtake Fix: When zoomed in, allow panning just a bit beyond the edges for a more natural feel
+                    // But then clamp it so you can never pan the image completely out of view.
+                    let scaled_size = image_size * self.state.scale;
+                    let max_pan_x = ((scaled_size.x - canvas_size.x) / 2.0).max(0.0);
+                    let max_pan_y = ((scaled_size.y - canvas_size.y) / 2.0).max(0.0);
+                    
+                    self.state.pan.x = self.state.pan.x.clamp(-max_pan_x, max_pan_x);
+                    self.state.pan.y = self.state.pan.y.clamp(-max_pan_y, max_pan_y);
                 } else {
-                    // If no texture is loaded yet, show what's happening
-                    ui.centered_and_justified(|ui| {
-                        if self.state.current_file_name.is_empty() {
-                            ui.label("No image loaded. Try 'Open With'...");
-                        } else {
-                            ui.spinner();
-                        }
-                    });
+                    self.state.scale = fit_scale;
+                    self.state.auto_fit = true;
+                    self.state.pan = egui::Vec2::ZERO;
+                }
+            }
+
+            // Draw the Image
+            let scaled_size = image_size * self.state.scale;
+            let center_offset = (canvas_size - scaled_size) / 2.0;
+            let image_top_left = response.rect.min + center_offset + self.state.pan;
+            let draw_rect = egui::Rect::from_min_size(image_top_left, scaled_size);
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+            
+            painter.image(texture.id(), draw_rect, uv, egui::Color32::WHITE);
+        } else {
+            // If no texture is loaded yet, show what's happening
+            ui.centered_and_justified(|ui| {
+                if let Some(err) = &self.state.load_error {
+                    // Show the error text in the middle
+                    ui.label(egui::RichText::new(err).color(ui.visuals().error_fg_color));
+                } else if self.state.current_file_name.is_empty() {
+                    ui.label("No image loaded.\nDrag and drop an image here.");
+                } else {
+                    ui.spinner();
                 }
             });
+        }
     }
 
     // --- HELPER: Window Border ---
@@ -352,10 +418,18 @@ impl ImageApp {
 impl eframe::App for ImageApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.sync_window_state(ctx);
+        self.handle_drag_and_drop(ctx); // <--- ADD THIS
         self.process_image_loading(ctx);
         
         self.render_top_bar(ctx);
-        self.render_main_canvas(ctx);
+        
+        // --- Add the Central Panel ---
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new())
+            .show(ctx, |ui| {
+                self.render_main_canvas(ctx, ui);
+            });
+            
         self.render_window_border(ctx);
     }
 }

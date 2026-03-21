@@ -9,6 +9,9 @@ raw-window-handle = "0.6"
 image = "0.25.10"
 webp = "0.3.1"
 zune-jpeg = "0.5.13"
+zune-png = "0.5.2"
+libavif-image = "0.14"
+jxl-oxide = { version = "0.12.5", features = ["image"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = [
