@@ -2,13 +2,18 @@ use eframe::egui;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 
-pub struct LoadedImage {
-    pub width: u32,
-    pub height: u32,
+pub struct ImageFrame {
     pub pixels: Vec<u8>,
+    pub duration_ms: u32,
 }
 
-// Helper function to quickly pad 3-channel RGB to 4-channel RGBA
+pub struct LoadedImage {
+    pub filename: String, // <-- NEW: Identify the image
+    pub width: u32,
+    pub height: u32,
+    pub frames: Vec<ImageFrame>, 
+}
+
 fn pad_rgb_to_rgba(rgb_pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
     let mut rgba_pixels = Vec::with_capacity((width * height * 4) as usize);
     for chunk in rgb_pixels.chunks_exact(3) {
@@ -17,15 +22,29 @@ fn pad_rgb_to_rgba(rgb_pixels: &[u8], width: u32, height: u32) -> Vec<u8> {
     rgba_pixels
 }
 
-pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Result<LoadedImage, String>>) {
+// Notice the Err type is now (String, String) to pass the filename back on failure
+pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Result<LoadedImage, (String, String)>>) {
     let (req_tx, req_rx) = channel::<PathBuf>();
-    let (res_tx, res_rx) = channel::<Result<LoadedImage, String>>();
+    let (res_tx, res_rx) = channel::<Result<LoadedImage, (String, String)>>();
 
     std::thread::spawn(move || {
-        while let Ok(path) = req_rx.recv() {
+        // Notice we made `path` mutable here so we can update it in the drain loop
+        while let Ok(mut path) = req_rx.recv() {
+            
+            // --- 1. THE QUEUE DRAIN ---
+            // If the user mashed the arrow keys while we were sleeping or decoding, 
+            // grab the absolute newest path and throw away all the intermediate ones!
+            while let Ok(newer_path) = req_rx.try_recv() {
+                path = newer_path;
+            }
+
+            // Extract filename to pass back to the UI
+            let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let err_filename = filename.clone(); // Kept for the error block
+
             let res = (|| -> Result<LoadedImage, Box<dyn std::error::Error + Send + Sync>> {
                 
-                println!("--- Loading Image: {:?} ---", path.file_name().unwrap_or_default());
+                println!("--- Loading Image: {} ---", filename);
                 let total_start = std::time::Instant::now();
                 
                 // 1. Instantly load file bytes into RAM
@@ -40,7 +59,7 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                     .to_lowercase();
 
                 // 3. Route to the fastest decoder based on extension
-                let (width, height, pixels) = match ext.as_str() {
+                let (width, height, frames) = match ext.as_str() {
                     
                     "webp" => {
                         // --- NATIVE C-LIBRARY FOR WEBP ---
@@ -61,7 +80,9 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                         } else {
                             println!("[WebP] Image already has alpha channel (no padding needed).");
                         }
-                        (w, h, px)
+                        
+                        // Wrap in a single ImageFrame
+                        (w, h, vec![ImageFrame { pixels: px, duration_ms: 0 }])
                     }
 
                     "avif" => {
@@ -74,11 +95,10 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                         let w = dynamic_img.width();
                         let h = dynamic_img.height();
                         
-                        // Safely extract the raw RGBA pixels
                         let px = dynamic_img.into_rgba8().into_raw();
-                        
                         println!("[AVIF] Native libavif Decoding took: {:?}", decode_start.elapsed());
-                        (w, h, px)
+                        
+                        (w, h, vec![ImageFrame { pixels: px, duration_ms: 0 }])
                     }
 
                     "jxl" => {
@@ -88,60 +108,52 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                         let jxl_decoder = jxl_oxide::integration::JxlDecoder::new(std::io::Cursor::new(&file_bytes))
                             .map_err(|e| format!("JXL Error: {}", e))?;
                             
-                        // Bridge the JXL decoder with the standard image crate
                         let dynamic_img = image::DynamicImage::from_decoder(jxl_decoder)
                             .map_err(|e| format!("JXL Dynamic Image Error: {}", e))?;
                             
                         let w = dynamic_img.width();
                         let h = dynamic_img.height();
                         
-                        // Safely extract the raw RGBA pixels
                         let px = dynamic_img.into_rgba8().into_raw();
-                        
                         println!("[JXL] Pure Rust jxl-oxide Decoding took: {:?}", decode_start.elapsed());
-                        (w, h, px)
+                        
+                        (w, h, vec![ImageFrame { pixels: px, duration_ms: 0 }])
                     }
 
                     "png" => {
-                        // --- FAST SIMD ACCELERATION FOR PNG (zune-png 0.5+) ---
+                        // --- FAST SIMD ACCELERATION FOR PNG ---
                         let decode_start = std::time::Instant::now();
                         use zune_png::PngDecoder;
                         use zune_jpeg::zune_core::bytestream::ZCursor;
                         use zune_jpeg::zune_core::result::DecodingResult;
                         
-                        // 1. Wrap the bytes in a ZCursor
                         let cursor = ZCursor::new(&file_bytes);
                         let mut decoder = PngDecoder::new(cursor);
                         
-                        // 2. Decode headers and get info
                         decoder.decode_headers().map_err(|e| format!("PNG Header Error: {:?}", e))?;
                         let info = decoder.info().ok_or("Failed to get PNG info")?;
                         
                         let w = info.width as u32;
                         let h = info.height as u32;
                         
-                        // 3. Decode returns an enum (DecodingResult) to handle 8-bit vs 16-bit
                         let decoded_enum = decoder.decode().map_err(|e| format!("PNG Decode Error: {:?}", e))?;
                         println!("[PNG] Zune SIMD Decoding took: {:?}", decode_start.elapsed());
 
-                        // 4. Safely extract the Vec<u8> based on the bit depth
                         let mut px = match decoded_enum {
                             DecodingResult::U8(data) => data,
                             DecodingResult::U16(data) => {
-                                // If it's a 16-bit PNG, quickly downsample to 8-bit for egui
                                 data.into_iter().map(|v| (v >> 8) as u8).collect()
                             },
                             _ => return Err("Unsupported PNG bit depth (Not 8 or 16-bit)".into()),
                         };
 
-                        // 5. Pad RGB (3 channels) to RGBA (4 channels) if necessary
                         if px.len() == (w * h * 3) as usize {
                             let pad_start = std::time::Instant::now();
                             px = pad_rgb_to_rgba(&px[..], w, h);
                             println!("[PNG] RGB to RGBA padding took: {:?}", pad_start.elapsed());
                         }
 
-                        (w, h, px)
+                        (w, h, vec![ImageFrame { pixels: px, duration_ms: 0 }])
                     }
                     
                     "jpg" | "jpeg" => {
@@ -151,7 +163,6 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                         use zune_jpeg::zune_core::colorspace::ColorSpace;
                         use zune_jpeg::zune_core::bytestream::ZCursor;
 
-                        // Tell the decoder to output RGBA directly, eliminating manual padding
                         let options = DecoderOptions::default()
                             .jpeg_set_out_colorspace(ColorSpace::RGBA);
                             
@@ -164,33 +175,68 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                         let w = info.width as u32;
                         let h = info.height as u32;
                         
-                        // Natively returns a Vec<u8> in RGBA format
                         let px = decoder.decode()?; 
                         println!("[JPEG] Zune SIMD Decoding (Direct to RGBA) took: {:?}", decode_start.elapsed());
                         
-                        (w, h, px)
+                        (w, h, vec![ImageFrame { pixels: px, duration_ms: 0 }])
+                    }
+                    
+                    "gif" => {
+                        // --- ANIMATED GIF DECODING ---
+                        let decode_start = std::time::Instant::now();
+                        use image::AnimationDecoder;
+                        
+                        let decoder = image::codecs::gif::GifDecoder::new(std::io::Cursor::new(&file_bytes))
+                            .map_err(|e| format!("GIF Decoder Error: {}", e))?;
+                            
+                        let frames_iter = decoder.into_frames();
+                        let mut frames = Vec::new();
+                        let mut w = 0;
+                        let mut h = 0;
+                        
+                        for (i, frame_res) in frames_iter.enumerate() {
+                            let frame = frame_res.map_err(|e| format!("GIF Frame Error: {}", e))?;
+                            let img = frame.buffer();
+                            
+                            if i == 0 {
+                                w = img.width();
+                                h = img.height();
+                            }
+                            
+                            let (num, den) = frame.delay().numer_denom_ms();
+                            let duration = if den > 0 { num / den } else { 100 };
+                            let duration_ms = if duration > 0 { duration } else { 100 };
+                            
+                            frames.push(ImageFrame {
+                                pixels: img.clone().into_raw(),
+                                duration_ms,
+                            });
+                        }
+                        
+                        println!("[GIF] Animated Decoding ({} frames) took: {:?}", frames.len(), decode_start.elapsed());
+                        
+                        (w, h, frames) 
                     }
                     
                     _ => {
-                        // --- FALLBACK FOR GIF, BMP, TIFF, ICO, ETC ---
+                        // --- FALLBACK FOR TIFF, BMP, ICO, ETC ---
                         let decode_start = std::time::Instant::now();
                         let img = image::load_from_memory(&file_bytes)?;
                         println!("[Fallback] Standard Rust Decoding took: {:?}", decode_start.elapsed());
                         
-                        let color_start = std::time::Instant::now();
                         let w = img.width();
                         let h = img.height();
                         let px = img.to_rgba8().into_raw();
-                        println!("[Fallback] Color Conversion (to RGBA) took: {:?}", color_start.elapsed());
                         
-                        (w, h, px)
+                        (w, h, vec![ImageFrame { pixels: px, duration_ms: 0 }])
                     }
                 };
 
                 println!("[Total] Background Processing Time: {:?}", total_start.elapsed());
                 println!("------------------------------------------------");
 
-                Ok(LoadedImage { width, height, pixels })
+                // --- NEW: Package the filename into the struct here ---
+                Ok(LoadedImage { filename, width, height, frames })
             })();
 
             // 4. Send the result and wake up the UI thread
@@ -200,7 +246,8 @@ pub fn spawn_image_loader(ctx: egui::Context) -> (Sender<PathBuf>, Receiver<Resu
                     ctx.request_repaint(); 
                 }
                 Err(e) => {
-                    let _ = res_tx.send(Err(e.to_string()));
+                    // --- NEW: Send the filename back alongside the error string ---
+                    let _ = res_tx.send(Err((err_filename, e.to_string())));
                     ctx.request_repaint(); 
                 }
             }

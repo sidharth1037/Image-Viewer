@@ -1,6 +1,8 @@
 use eframe::egui;
 use crate::state::ViewerState;
 
+const DOUBLE_CLICK_ZOOM_LEVEL: f32 = 2.5; // 250%
+
 pub struct ImageApp {
     state: ViewerState,
     is_focused: bool,
@@ -13,7 +15,10 @@ impl ImageApp {
         
         // 1. Pass the context cloned from cc to the loader
         let (req_tx, res_rx) = crate::image_io::spawn_image_loader(cc.egui_ctx.clone());
-        let mut state = ViewerState::new(req_tx, res_rx);
+        // Start the scanner thread
+        let (dir_req_tx, dir_res_rx) = crate::scanner::spawn_directory_scanner(); 
+        
+        let mut state = ViewerState::new(req_tx, res_rx, dir_req_tx, dir_res_rx);
 
         // 3. Handle the command line argument if it exists
         if let Some(path_str) = initial_file {
@@ -24,8 +29,12 @@ impl ImageApp {
                 state.current_file_name = name.to_string_lossy().into_owned();
             }
             
-            // Send the path to the background thread to start loading immediately
-            let _ = state.req_tx.send(path);
+            // Send the path to the background thread to start loading immediately and populate the playlist
+            let _ = state.req_tx.send(path.clone());
+            let _ = state.dir_req_tx.send(crate::scanner::ScanRequest {
+                target_path: path,
+                sort_method: state.sort_method,
+            });
         }
 
         #[cfg(windows)]
@@ -64,46 +73,155 @@ impl ImageApp {
 
     // --- HELPER: Background Image Loading ---
     fn process_image_loading(&mut self, ctx: &egui::Context) {
-        if let Ok(result) = self.state.res_rx.try_recv() {
+        let mut latest_result = None;
+        while let Ok(result) = self.state.res_rx.try_recv() {
+            latest_result = Some(result);
+        }
+
+        if let Some(result) = latest_result {
             match result {
                 Ok(loaded_image) => {
-                    let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                        [loaded_image.width as usize, loaded_image.height as usize],
-                        &loaded_image.pixels,
-                    );
-                    self.state.texture = Some(ctx.load_texture(
-                        "viewer_image",
-                        color_image,
-                        egui::TextureOptions::LINEAR,
-                    ));
-                    self.state.load_error = None; // Clear any previous errors
+                    // --- 2. REJECT STALE IMAGES ---
+                    if loaded_image.filename != self.state.current_file_name {
+                        println!("Dropped stale image: {}", loaded_image.filename);
+                        return; // The user already moved on, throw this away!
+                    }
+
+                    // Wipe the old animation state
+                    self.state.frames.clear();
+                    self.state.frame_durations.clear();
+                    self.state.current_frame = 0;
+                    self.state.last_frame_time = None;
+
+                    // Load every frame into the GPU
+                    for (i, frame) in loaded_image.frames.iter().enumerate() {
+                        let color_image = egui::ColorImage::from_rgba_unmultiplied(
+                            [loaded_image.width as usize, loaded_image.height as usize],
+                            &frame.pixels,
+                        );
+                        self.state.frames.push(ctx.load_texture(
+                            format!("viewer_image_frame_{}", i),
+                            color_image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                        self.state.frame_durations.push(frame.duration_ms as f64 / 1000.0);
+                    }
+                    self.state.load_error = None;
                 }
-                Err(err) => {
-                    self.state.texture = None; // Clear the bad texture
-                    self.state.load_error = Some(format!("Unsupported or invalid file:\n{}", err));
+                Err((err_filename, err_msg)) => {
+                    // --- REJECT STALE ERRORS ---
+                    if err_filename != self.state.current_file_name {
+                        return;
+                    }
+                    
+                    self.state.frames.clear();
+                    self.state.load_error = Some(format!("Unsupported or invalid file:\n{}", err_msg));
                 }
             }
         }
     }
 
+    // --- HELPER: Unified File Loader ---
+    // We use this so Drag/Drop and Arrow Keys share the exact same reset logic
+    fn load_target_file(&mut self, path: std::path::PathBuf) {
+        if let Some(name) = path.file_name() {
+            self.state.current_file_name = name.to_string_lossy().into_owned();
+        }
+        
+        // Wipe old animation/image state
+        self.state.frames.clear();
+        self.state.frame_durations.clear();
+        self.state.current_frame = 0;
+        self.state.load_error = None;
+
+        // Reset the camera back to default
+        self.state.auto_fit = true;
+        self.state.pan = egui::Vec2::ZERO;
+        self.state.target_scale = None;
+        self.state.target_pan = None;
+        self.state.reset_start_time = None;
+        
+        // Tell the background thread to decode it
+        let _ = self.state.req_tx.send(path);
+    }
+
+    // --- HELPER: Keyboard Navigation ---
+    fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        if self.state.playlist.is_empty() {
+            return; // Nothing to navigate
+        }
+
+        let mut navigate_to = None;
+
+        ctx.input(|i| {
+            if i.key_pressed(egui::Key::ArrowRight) {
+                // Move forward, wrap around to 0 if at the end
+                navigate_to = Some((self.state.current_index + 1) % self.state.playlist.len());
+            } else if i.key_pressed(egui::Key::ArrowLeft) {
+                // Move backward, wrap around to the end if at 0
+                if self.state.current_index == 0 {
+                    navigate_to = Some(self.state.playlist.len() - 1);
+                } else {
+                    navigate_to = Some(self.state.current_index - 1);
+                }
+            }
+        });
+
+        if let Some(new_index) = navigate_to {
+            self.state.current_index = new_index;
+            let next_path = self.state.playlist[new_index].clone();
+            self.load_target_file(next_path);
+        }
+    }
+
+    // --- HELPER: Background Directory Sync ---
+    fn process_directory_scanning(&mut self) {
+        let mut latest_scan = None;
+        while let Ok(result) = self.state.dir_res_rx.try_recv() {
+            latest_scan = Some(result);
+        }
+
+        if let Some(scan) = latest_scan {
+            self.state.current_folder = Some(scan.folder_path);
+            self.state.playlist = scan.playlist;
+            self.state.current_index = scan.current_index;
+            println!("Scanner found {} images. We are at index {}.", self.state.playlist.len(), self.state.current_index);
+        }
+    }
+
     // --- HELPER: Drag and Drop ---
     fn handle_drag_and_drop(&mut self, ctx: &egui::Context) {
-        // eframe automatically queues dropped files in the input state
         ctx.input(|i| {
             if let Some(dropped_file) = i.raw.dropped_files.first() {
                 if let Some(path) = &dropped_file.path {
                     
-                    // 1. Update title bar
-                    if let Some(name) = path.file_name() {
-                        self.state.current_file_name = name.to_string_lossy().into_owned();
+                    self.load_target_file(path.clone());
+                    
+                    // --- THE REDUNDANT SCAN OPTIMIZATION ---
+                    if let Some(parent) = path.parent() {
+                        if Some(parent.to_path_buf()) == self.state.current_folder {
+                            
+                            if let Some(idx) = self.state.playlist.iter().position(|p| p == path) {
+                                self.state.current_index = idx;
+                                println!("Optimization: Skipped directory scan. Updated index to {}", idx);
+                            } else {
+                                // THE FIX: File is in the same folder, but wasn't in our playlist 
+                                // (e.g., a newly downloaded file). We must trigger a rescan!
+                                println!("Optimization bypassed: New file detected in current folder. Rescanning.");
+                                let _ = self.state.dir_req_tx.send(crate::scanner::ScanRequest {
+                                    target_path: path.clone(),
+                                    sort_method: self.state.sort_method,
+                                });
+                            }
+                            
+                        } else {
+                            // Different folder! Trigger a full background scan.
+                            let _ = self.state.dir_req_tx.send(crate::scanner::ScanRequest {
+                                target_path: path.clone(),
+                                sort_method: self.state.sort_method,
+                            });
+                        }
                     }
-                    
-                    // 2. Wipe the current image/errors to show the loading spinner immediately
-                    self.state.texture = None;
-                    self.state.load_error = None;
-                    
-                    // 3. Send the new file to the background thread
-                    let _ = self.state.req_tx.send(path.clone());
                 }
             }
         });
@@ -259,7 +377,33 @@ impl ImageApp {
         ui.painter().rect_filled(rect, 0.0, ui.visuals().window_fill());
 
         // Center everything inside this panel
-        if let Some(texture) = &self.state.texture {
+        if !self.state.frames.is_empty() {
+            let current_time = ctx.input(|i| i.time);
+            
+            // --- ANIMATION PLAYER LOGIC ---
+            if self.state.frames.len() > 1 {
+                if let Some(last_time) = self.state.last_frame_time {
+                    let duration = self.state.frame_durations[self.state.current_frame];
+                    
+                    // If it's time to swap frames
+                    if current_time - last_time >= duration {
+                        self.state.current_frame = (self.state.current_frame + 1) % self.state.frames.len();
+                        self.state.last_frame_time = Some(current_time);
+                    }
+                    
+                    // Tell the OS to wake our app up EXACTLY when the next frame is due!
+                    let next_frame_in = (duration - (current_time - last_time)).max(0.0);
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(next_frame_in));
+                } else {
+                    // Initialize the timer on the very first frame
+                    self.state.last_frame_time = Some(current_time);
+                    ctx.request_repaint();
+                }
+            }
+
+            // Grab the current frame to draw
+            let texture = &self.state.frames[self.state.current_frame];
+            
             // Allocate the entire canvas area to capture mouse inputs
             let canvas_size = ui.available_size();
             let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::click_and_drag());
@@ -277,66 +421,90 @@ impl ImageApp {
             }
 
 
-            // --- 1. DETECT TRIGGER ---
+            // --- 1. CONTEXT-AWARE DOUBLE CLICK ---
             if response.double_clicked() {
-                // Record the time the animation started
-                self.state.reset_start_time = Some(ui.input(|i| i.time));
                 self.state.auto_fit = false;
+                
+                // Check if we are currently fitted or already zoomed
+                let is_fitted = (self.state.scale - fit_scale).abs() < 0.001;
+
+                if is_fitted {
+                    // --- ZOOM IN TO CURSOR ---
+                    let zoom_factor = DOUBLE_CLICK_ZOOM_LEVEL; // 1.5
+                    self.state.target_scale = Some(fit_scale * zoom_factor);
+                    
+                    if let Some(pointer_pos) = response.hover_pos() {
+                        let canvas_center = response.rect.center();
+                        let pointer_offset = pointer_pos - canvas_center;
+                        
+                        // Math: To keep the point under the cursor stationary, we must 
+                        // offset the pan by the pointer's distance from center, 
+                        // multiplied by the change in scale.
+                        self.state.target_pan = Some(-pointer_offset * (zoom_factor - 1.0));
+                    }
+                } else {
+                    // --- ZOOM OUT TO CENTER ---
+                    self.state.target_scale = Some(fit_scale);
+                    self.state.target_pan = Some(egui::Vec2::ZERO);
+                }
+
+                self.state.reset_start_time = Some(ui.input(|i| i.time));
             }
 
-            // --- 2. ANIMATION LOGIC ---
+            // --- 2. THE BEST STATELESS ANIMATION ---
             if let Some(start_time) = self.state.reset_start_time {
                 let current_time = ui.input(|i| i.time);
                 let elapsed = (current_time - start_time) as f32;
-                let duration = 0.35; // 350ms is the "sweet spot" for UI snappiness
-
-                // Normalized time (0.0 to 1.0)
+                let duration = 0.35; 
                 let t = (elapsed / duration).clamp(0.0, 1.0);
 
-                // Lerp Scale: Current = Start + (Target - Start) * Ease
-                // Note: We don't need to store the "Start Scale" because we can 
-                // effectively move the current scale towards fit_scale using the factor.
-                let lerp_factor = 0.25; // Adjust for "stickiness"
-                self.state.scale += (fit_scale - self.state.scale) * lerp_factor;
-                self.state.pan += (egui::Vec2::ZERO - self.state.pan) * lerp_factor;
+                // Only proceed if we have valid targets
+                if let (Some(t_scale), Some(t_pan)) = (self.state.target_scale, self.state.target_pan) {
+                    let lerp_factor = 0.25; 
 
-                // --- 3. THE "BLOCKING" HAND-OFF ---
-                // If we are very close to the target or time is up, snap and release
-                if t >= 1.0 || ((fit_scale - self.state.scale).abs() < 0.001 && self.state.pan.length() < 0.1) {
-                    self.state.scale = fit_scale;
-                    self.state.pan = egui::Vec2::ZERO;
-                    self.state.reset_start_time = None;
-                    self.state.auto_fit = true;
+                    // Move current values toward the specific targets
+                    self.state.scale += (t_scale - self.state.scale) * lerp_factor;
+                    self.state.pan += (t_pan - self.state.pan) * lerp_factor;
+
+                    // Check for completion
+                    if t >= 1.0 || ((t_scale - self.state.scale).abs() < 0.001 && (t_pan - self.state.pan).length() < 0.1) {
+                        self.state.scale = t_scale;
+                        self.state.pan = t_pan;
+                        self.state.reset_start_time = None;
+                        self.state.target_scale = None;
+                        self.state.target_pan = None;
+
+                        // Lock back to auto-fit if we just zoomed out
+                        if (t_scale - fit_scale).abs() < 0.001 {
+                            self.state.auto_fit = true;
+                        }
+                    }
                 }
-
-                // Keep the UI thread alive at max refresh rate during the animation
                 ctx.request_repaint();
-
             } else {
                 // Handle Zoom & Pan Inputs
                 if response.hovered() {
                     let scroll = ctx.input(|i| i.smooth_scroll_delta.y); 
-                    if let Some(pointer_pos) = response.hover_pos() {
-                        self.state.auto_fit = false;
+                    
+                    if scroll != 0.0 {
+                        if let Some(pointer_pos) = response.hover_pos() {
+                            self.state.auto_fit = false;
 
-                        // The continuous math perfectly scales the zoom to the speed of the wheel.
-                        // Tweak this 0.005 number if you want the wheel to feel heavier or lighter.
-                        let zoom_multiplier = (scroll * 0.005).exp();
-                        let old_scale = self.state.scale;
-                        // THE BOUNCE FIX: Never let the scale shrink past the window bounds
-                        let new_scale = (old_scale * zoom_multiplier).max(fit_scale);
+                            let zoom_multiplier = (scroll * 0.005).exp();
+                            let old_scale = self.state.scale;
+                            let new_scale = (old_scale * zoom_multiplier).max(fit_scale);
 
-                        // Zoom Towards Cursor Math
-                        let canvas_center = response.rect.center();
-                        let pointer_offset = pointer_pos - canvas_center;
-                        let scale_ratio = new_scale / old_scale;
-                        
-                        self.state.pan -= (pointer_offset - self.state.pan) * (scale_ratio - 1.0);
-                        self.state.scale = new_scale;
+                            let canvas_center = response.rect.center();
+                            let pointer_offset = pointer_pos - canvas_center;
+                            let scale_ratio = new_scale / old_scale;
+                            
+                            self.state.pan -= (pointer_offset - self.state.pan) * (scale_ratio - 1.0);
+                            self.state.scale = new_scale;
+                        }
                     }
                 }
 
-                let is_zoomed_in = self.state.scale > fit_scale * 1.001;
+                let is_zoomed_in = self.state.scale > fit_scale * 1.0001;
 
                 // Panning (Click & Drag)
                 if is_zoomed_in {
@@ -418,8 +586,10 @@ impl ImageApp {
 impl eframe::App for ImageApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.sync_window_state(ctx);
-        self.handle_drag_and_drop(ctx); // <--- ADD THIS
+        self.handle_drag_and_drop(ctx);
+        self.handle_keyboard(ctx);
         self.process_image_loading(ctx);
+        self.process_directory_scanning();
         
         self.render_top_bar(ctx);
         

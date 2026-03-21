@@ -5,6 +5,7 @@
 mod state;
 mod app;
 mod image_io;
+mod scanner;
 #[cfg(windows)]
 mod win32;
 
