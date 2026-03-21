@@ -48,7 +48,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
         let mut current_color = if app.is_focused {
             ctx.style().visuals.strong_text_color().gamma_multiply(0.8)
         } else {
-            ctx.style().visuals.window_stroke.color.gamma_multiply(0.4)
+            ctx.style().visuals.strong_text_color().gamma_multiply(0.4)
         };
 
         if app.state.is_fullscreen {

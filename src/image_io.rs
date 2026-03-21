@@ -26,6 +26,96 @@ fn pad_rgb_to_rgba(rgb_pixels: &[u8]) -> Vec<u8> {
     rgba_pixels
 }
 
+/// --- In-Memory Pixel Rotator ---
+/// Takes a flat RGBA pixel array and physically rearranges the bytes based on EXIF rules.
+fn apply_exif_orientation(
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    orientation: u32,
+) -> (u32, u32, Vec<u8>) {
+    // If orientation is 1 (Normal) or invalid, return the original array without cloning (Zero cost!)
+    if orientation <= 1 || orientation > 8 {
+        return (width, height, pixels);
+    }
+
+    let w = width as usize;
+    let h = height as usize;
+    let mut out = vec![0u8; pixels.len()];
+
+    match orientation {
+        2 => { // Flip Horizontal
+            for y in 0..h {
+                for x in 0..w {
+                    let src = (y * w + x) * 4;
+                    let dst = (y * w + (w - 1 - x)) * 4;
+                    out[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+                }
+            }
+            (width, height, out)
+        }
+        3 => { // Rotate 180
+            for y in 0..h {
+                for x in 0..w {
+                    let src = (y * w + x) * 4;
+                    let dst = ((h - 1 - y) * w + (w - 1 - x)) * 4;
+                    out[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+                }
+            }
+            (width, height, out)
+        }
+        4 => { // Flip Vertical
+            for y in 0..h {
+                let src = (y * w) * 4;
+                let dst = ((h - 1 - y) * w) * 4;
+                out[dst..dst + w * 4].copy_from_slice(&pixels[src..src + w * 4]);
+            }
+            (width, height, out)
+        }
+        5 => { // Transpose (Flip Horizontally & Rotate 90 CW)
+            for y in 0..h {
+                for x in 0..w {
+                    let src = (y * w + x) * 4;
+                    let dst = (x * h + y) * 4;
+                    out[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+                }
+            }
+            (height, width, out)
+        }
+        6 => { // Rotate 90 CW (Standard iPhone Portrait)
+            for y in 0..h {
+                for x in 0..w {
+                    let src = (y * w + x) * 4;
+                    let dst = (x * h + (h - 1 - y)) * 4;
+                    out[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+                }
+            }
+            (height, width, out)
+        }
+        7 => { // Transverse (Flip Horizontally & Rotate 90 CCW)
+            for y in 0..h {
+                for x in 0..w {
+                    let src = (y * w + x) * 4;
+                    let dst = ((w - 1 - x) * h + (h - 1 - y)) * 4;
+                    out[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+                }
+            }
+            (height, width, out)
+        }
+        8 => { // Rotate 90 CCW
+            for y in 0..h {
+                for x in 0..w {
+                    let src = (y * w + x) * 4;
+                    let dst = ((w - 1 - x) * h + y) * 4;
+                    out[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+                }
+            }
+            (height, width, out)
+        }
+        _ => (width, height, pixels),
+    }
+}
+
 /// Spawns a dedicated background thread for heavy image decoding.
 /// Returns a Sender to request paths, and a Receiver to get the decoded pixels.
 pub fn spawn_image_loader(
@@ -53,6 +143,16 @@ pub fn spawn_image_loader(
                 // 1. Instantly read file bytes into RAM
                 let file_bytes = std::fs::read(&path)?;
                 
+                // --- Read EXIF Orientation Tag ---
+                // We use kamadak-exif to find the hidden orientation rule before we decode
+                let exif_orientation = match exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&file_bytes)) {
+                    Ok(exif) => match exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
+                        Some(field) => field.value.get_uint(0).unwrap_or(1) as u32,
+                        None => 1,
+                    },
+                    Err(_) => 1,
+                };
+
                 // 2. Determine format routing via MAGIC BYTES instead of extension
                 let ext_fallback = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
                 
@@ -211,7 +311,23 @@ pub fn spawn_image_loader(
                     }
                 };
 
-                Ok(LoadedImage { filename, width, height, frames })
+                // --- Apply EXIF Rotation to all decoded frames ---
+                let mut oriented_frames = Vec::with_capacity(frames.len());
+                let mut final_w = width;
+                let mut final_h = height;
+
+                for frame in frames {
+                    // Send pixel data through the physical rearranger
+                    let (nw, nh, npix) = apply_exif_orientation(frame.pixels, width, height, exif_orientation);
+                    final_w = nw;
+                    final_h = nh;
+                    oriented_frames.push(ImageFrame {
+                        pixels: npix,
+                        duration_ms: frame.duration_ms,
+                    });
+                }
+
+                Ok(LoadedImage { filename, width: final_w, height: final_h, frames: oriented_frames })
             })();
 
             // 4. Send the result and wake up the UI thread for an immediate frame update
