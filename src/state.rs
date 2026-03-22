@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicU64;
 use eframe::egui::{TextureHandle, Vec2}; 
 
 pub struct ViewerState {
+    // NOTE: This tracks viewport maximized state (not OS exclusive fullscreen mode).
     pub is_fullscreen: bool,
     pub current_file_name: String,
     
@@ -28,21 +29,24 @@ pub struct ViewerState {
     // --- Async Communication ---
     pub load_id: Arc<AtomicU64>, // Cancellation token
     pub req_tx: Sender<(PathBuf, u64)>, // Sends (Path, VersionID)
-    pub res_rx: Receiver<Result<crate::image_io::LoadedImage, (String, String)>>,
+    pub res_rx: Receiver<Result<crate::image_io::LoadedImage, crate::image_io::LoadFailure>>,
 
     // --- Playlist State ---
     pub current_folder: Option<PathBuf>,
     pub playlist: Vec<PathBuf>,
     pub current_index: usize,
     pub sort_method: crate::scanner::SortMethod, 
+    pub scan_id: Arc<AtomicU64>, // Cancellation token for folder scans
     pub dir_req_tx: Sender<crate::scanner::ScanRequest>, 
     pub dir_res_rx: Receiver<crate::scanner::DirectoryState>,
 }
 
 impl ViewerState {
     pub fn new(
+        load_id: Arc<AtomicU64>,
         req_tx: Sender<(PathBuf, u64)>,
-        res_rx: Receiver<Result<crate::image_io::LoadedImage, (String, String)>>,
+        res_rx: Receiver<Result<crate::image_io::LoadedImage, crate::image_io::LoadFailure>>,
+        scan_id: Arc<AtomicU64>,
         dir_req_tx: Sender<crate::scanner::ScanRequest>,
         dir_res_rx: Receiver<crate::scanner::DirectoryState>
     ) -> Self {
@@ -60,13 +64,14 @@ impl ViewerState {
             current_frame: 0,
             last_frame_time: None,
             load_error: None,
-            load_id: Arc::new(AtomicU64::new(0)),
+            load_id,
             req_tx,
             res_rx,
             current_folder: None,
             playlist: Vec::new(),
             current_index: 0,
             sort_method: crate::scanner::SortMethod::Natural,
+            scan_id,
             dir_req_tx,
             dir_res_rx,
         }

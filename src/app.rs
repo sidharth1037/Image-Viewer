@@ -38,24 +38,11 @@ impl ImageApp {
         
         // --- Versioning & Loading Setup ---
         let load_id = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let scan_id = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let (req_tx, res_rx) = crate::image_io::spawn_image_loader(cc.egui_ctx.clone(), load_id.clone());
-        let (dir_req_tx, dir_res_rx) = crate::scanner::spawn_directory_scanner(); 
+        let (dir_req_tx, dir_res_rx) = crate::scanner::spawn_directory_scanner(scan_id.clone()); 
         
-        let mut state = ViewerState::new(req_tx, res_rx, dir_req_tx, dir_res_rx);
-        state.load_id = load_id; // Share the version tracker with the background loader
-
-        if let Some(path_str) = initial_file {
-            let path = std::path::PathBuf::from(&path_str);
-            if let Some(name) = path.file_name() {
-                state.current_file_name = name.to_string_lossy().into_owned();
-            }
-            // Send initial request with version 0
-            let _ = state.req_tx.send((path.clone(), 0));
-            let _ = state.dir_req_tx.send(crate::scanner::ScanRequest {
-                target_path: path,
-                sort_method: state.sort_method,
-            });
-        }
+        let state = ViewerState::new(load_id, req_tx, res_rx, scan_id, dir_req_tx, dir_res_rx);
 
         #[cfg(windows)]
         let hwnd = {
@@ -71,7 +58,7 @@ impl ImageApp {
             h
         };
 
-        Self {
+        let mut app = Self {
             state,
             settings: AppSettings::default(),
             is_focused: true,
@@ -80,7 +67,13 @@ impl ImageApp {
             cached_title: String::new(),
             last_title_width: 0.0,
             show_settings_window: false,
+        };
+
+        if let Some(path_str) = initial_file {
+            crate::handlers::open_target(&mut app, std::path::PathBuf::from(path_str));
         }
+
+        app
     }
 }
 

@@ -2,6 +2,25 @@ use eframe::egui;
 use crate::app::ImageApp;
 use std::sync::atomic::Ordering;
 
+fn next_scan_request_id(app: &ImageApp) -> u64 {
+    app.state.scan_id.fetch_add(1, Ordering::AcqRel) + 1
+}
+
+pub fn request_directory_scan(app: &mut ImageApp, target_path: std::path::PathBuf) {
+    let request_id = next_scan_request_id(app);
+    let _ = app.state.dir_req_tx.send(crate::scanner::ScanRequest {
+        target_path,
+        sort_method: app.state.sort_method,
+        request_id,
+    });
+}
+
+/// Queues both image loading and directory scanning through the same runtime paths.
+pub fn open_target(app: &mut ImageApp, path: std::path::PathBuf) {
+    load_target_file(app, path.clone());
+    request_directory_scan(app, path);
+}
+
 pub fn load_target_file(app: &mut ImageApp, path: std::path::PathBuf) {
     if let Some(name) = path.file_name() {
         app.state.current_file_name = name.to_string_lossy().into_owned();
@@ -9,7 +28,7 @@ pub fn load_target_file(app: &mut ImageApp, path: std::path::PathBuf) {
     }
     
     // Atomically increment ID to notify the background thread to abort current work
-    let current_id = app.state.load_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let current_id = app.state.load_id.fetch_add(1, Ordering::AcqRel) + 1;
 
     app.state.frames.clear();
     app.state.frame_durations.clear();
@@ -43,7 +62,11 @@ pub fn process_image_loading(app: &mut ImageApp, ctx: &egui::Context) {
     if let Some(result) = latest_result {
         match result {
             Ok(loaded_image) => {
-                if loaded_image.filename != app.state.current_file_name { return; }
+                // Only accept results for the latest active request.
+                let expected_id = app.state.load_id.load(Ordering::Acquire);
+                if loaded_image.request_id != expected_id {
+                    return;
+                }
 
                 app.state.frames.clear();
                 app.state.frame_durations.clear();
@@ -64,10 +87,14 @@ pub fn process_image_loading(app: &mut ImageApp, ctx: &egui::Context) {
                 }
                 app.state.load_error = None;
             }
-            Err((err_filename, err_msg)) => {
-                if err_filename != app.state.current_file_name { return; }
+            Err(load_failure) => {
+                // Prevent stale error flashes from outdated decode jobs.
+                let expected_id = app.state.load_id.load(Ordering::Acquire);
+                if load_failure.request_id != expected_id {
+                    return;
+                }
                 app.state.frames.clear();
-                app.state.load_error = Some(format!("Unsupported or invalid file:\n{}", err_msg));
+                app.state.load_error = Some(format!("Unsupported or invalid file:\n{}", load_failure.message));
             }
         }
     }
@@ -123,6 +150,10 @@ pub fn process_directory_scanning(app: &mut ImageApp) {
     }
 
     if let Some(scan) = latest_scan {
+        let expected_id = app.state.scan_id.load(Ordering::Acquire);
+        if scan.request_id != expected_id {
+            return;
+        }
         app.state.current_folder = Some(scan.folder_path);
         app.state.playlist = scan.playlist;
         app.state.current_index = scan.current_index;
@@ -140,10 +171,7 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
                         if let Some(idx) = app.state.playlist.iter().position(|p| p == path) {
                             app.state.current_index = idx;
                         } else {
-                            let _ = app.state.dir_req_tx.send(crate::scanner::ScanRequest {
-                                target_path: path.clone(),
-                                sort_method: app.state.sort_method,
-                            });
+                            request_directory_scan(app, path.clone());
                         }
                     } else {
                         // --- THE FIX: PREVENT ASYNC RACE CONDITIONS ---
@@ -152,10 +180,7 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
                         app.state.playlist.clear(); 
                         app.state.current_index = 0;
 
-                        let _ = app.state.dir_req_tx.send(crate::scanner::ScanRequest {
-                            target_path: path.clone(),
-                            sort_method: app.state.sort_method,
-                        });
+                        request_directory_scan(app, path.clone());
                     }
                 }
             }

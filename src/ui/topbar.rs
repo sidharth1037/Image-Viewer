@@ -172,31 +172,29 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 crate::scanner::SortMethod::DateCreated => format!("{} Created", icons::CALENDAR_PLUS),
             };
 
-            let old_style = ctx.style().clone();
-            
-            ctx.style_mut(|style| {
+            // Style the popup locally to avoid global context style churn every frame.
+            ui.scope(|ui| {
+                let style = ui.style_mut();
                 style.visuals.window_fill = egui::Color32::TRANSPARENT;
                 style.visuals.window_stroke = egui::Stroke::NONE;
                 style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-                style.spacing.menu_margin = egui::Margin::same(0);    
-            });
+                style.spacing.menu_margin = egui::Margin::same(0);
 
-            egui::ComboBox::from_id_salt("sort_combo_box")
-                .selected_text(sort_label)
-                .width(110.0) 
-                .show_ui(ui, |ui| {
-                    ui.add_space(14.0);
-                    
-                    egui::Frame::menu(&old_style).show(ui, |ui| {
-                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Alphabetical, "Name (Alphabetical)").changed();
-                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Natural, "Name (Natural)").changed();
-                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Size, "Size").changed();
-                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::DateModified, "Date Modified").changed();
-                        sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::DateCreated, "Date Created").changed();
+                egui::ComboBox::from_id_salt("sort_combo_box")
+                    .selected_text(sort_label)
+                    .width(110.0)
+                    .show_ui(ui, |ui| {
+                        ui.add_space(14.0);
+
+                        egui::Frame::menu(ui.style()).show(ui, |ui| {
+                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Alphabetical, "Name (Alphabetical)").changed();
+                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Natural, "Name (Natural)").changed();
+                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Size, "Size").changed();
+                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::DateModified, "Date Modified").changed();
+                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::DateCreated, "Date Created").changed();
+                        });
                     });
-                });
-
-            ctx.set_style(old_style);
+            });
 
             // If the user picked a new method, instantly trigger a background rescan
             if sort_changed {
@@ -215,10 +213,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
                 // Send the new sort request
                 if let Some(path) = target {
-                    let _ = app.state.dir_req_tx.send(crate::scanner::ScanRequest {
-                        target_path: path,
-                        sort_method: app.state.sort_method,
-                    });
+                    crate::handlers::request_directory_scan(app, path);
                 }
             }
         });

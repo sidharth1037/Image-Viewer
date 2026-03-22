@@ -13,11 +13,18 @@ pub struct ImageFrame {
 
 /// The final payload sent from the background decoding thread to the UI thread.
 pub struct LoadedImage {
-    pub filename: String,
+    pub request_id: u64,
     pub width: u32,
     pub height: u32,
     pub frames: Vec<ImageFrame>, // Holds 1 frame for static images, many for GIFs
 }
+
+pub struct LoadFailure {
+    pub request_id: u64,
+    pub message: String,
+}
+
+const MIN_ANIM_FRAME_MS: u32 = 16;
 
 /// Helper function to rapidly convert 3-channel RGB data into 4-channel RGBA data.
 /// eframe/egui strictly requires an Alpha channel for texture rendering.
@@ -124,9 +131,9 @@ fn apply_exif_orientation(
 pub fn spawn_image_loader(
     ctx: egui::Context,
     id_tracker: Arc<AtomicU64>, // Added tracker to monitor for stale requests
-) -> (Sender<(PathBuf, u64)>, Receiver<Result<LoadedImage, (String, String)>>) {
+) -> (Sender<(PathBuf, u64)>, Receiver<Result<LoadedImage, LoadFailure>>) {
     let (req_tx, req_rx) = channel::<(PathBuf, u64)>();
-    let (res_tx, res_rx) = channel::<Result<LoadedImage, (String, String)>>();
+    let (res_tx, res_rx) = channel::<Result<LoadedImage, LoadFailure>>();
 
     std::thread::spawn(move || {
         while let Ok((mut path, mut req_id)) = req_rx.recv() {
@@ -137,17 +144,14 @@ pub fn spawn_image_loader(
                 req_id = newer_id;
             }
 
-            let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-            let err_filename = filename.clone(); 
-
             let res = (|| -> Result<LoadedImage, Box<dyn std::error::Error + Send + Sync>> {
                 
                 // VERSION CHECK: Abort if a newer request was sent before we read the file
-                if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
+                if id_tracker.load(Ordering::Acquire) != req_id { return Err("Stale Request".into()); }
                 let file_bytes = std::fs::read(&path)?;
                 
                 // VERSION CHECK: Abort before EXIF parsing if request is now stale
-                if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
+                if id_tracker.load(Ordering::Acquire) != req_id { return Err("Stale Request".into()); }
                 let exif_orientation = match exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&file_bytes)) {
                     Ok(exif) => match exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
                         Some(field) => field.value.get_uint(0).unwrap_or(1) as u32,
@@ -176,7 +180,7 @@ pub fn spawn_image_loader(
                 };
 
                 // VERSION CHECK: Abort before the heavy decoding step
-                if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
+                if id_tracker.load(Ordering::Acquire) != req_id { return Err("Stale Request".into()); }
 
                 // 3. Decode bytes using the most optimal crate available
                 let (width, height, frames) = match format_str {
@@ -286,7 +290,7 @@ pub fn spawn_image_loader(
                         // Automatically handles complex disposal methods and delta blending
                         for (i, frame_res) in decoder.into_frames().enumerate() {
                             // VERSION CHECK: Abort mid-GIF if a newer image was requested
-                            if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
+                            if id_tracker.load(Ordering::Acquire) != req_id { return Err("Stale Request".into()); }
                             
                             let frame = frame_res.map_err(|e| format!("GIF Frame Error: {}", e))?;
                             let img = frame.buffer();
@@ -298,7 +302,8 @@ pub fn spawn_image_loader(
                             
                             let (num, den) = frame.delay().numer_denom_ms();
                             // Fallback to 100ms (10fps) if the GIF has corrupted timing data
-                            let duration_ms = if den > 0 && num > 0 { num / den } else { 100 };
+                            let raw_duration_ms = if den > 0 && num > 0 { num / den } else { 100 };
+                            let duration_ms = raw_duration_ms.max(MIN_ANIM_FRAME_MS);
                             
                             frames.push(ImageFrame {
                                 pixels: img.clone().into_raw(),
@@ -321,7 +326,7 @@ pub fn spawn_image_loader(
                 };
 
                 // VERSION CHECK: Final check before starting orientation math
-                if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
+                if id_tracker.load(Ordering::Acquire) != req_id { return Err("Stale Request".into()); }
 
                 // --- Apply EXIF Rotation to all decoded frames ---
                 let mut oriented_frames = Vec::with_capacity(frames.len());
@@ -330,7 +335,7 @@ pub fn spawn_image_loader(
 
                 for frame in frames {
                     // VERSION CHECK: Abort if request is now stale
-                    if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
+                    if id_tracker.load(Ordering::Acquire) != req_id { return Err("Stale Request".into()); }
                     
                     let (nw, nh, npix) = apply_exif_orientation(frame.pixels, width, height, exif_orientation);
                     final_w = nw;
@@ -341,7 +346,7 @@ pub fn spawn_image_loader(
                     });
                 }
 
-                Ok(LoadedImage { filename, width: final_w, height: final_h, frames: oriented_frames })
+                Ok(LoadedImage { request_id: req_id, width: final_w, height: final_h, frames: oriented_frames })
             })();
 
             // 4. Send the result ONLY IF it is not stale
@@ -354,7 +359,10 @@ pub fn spawn_image_loader(
                     // Silently drop stale results
                 }
                 Err(e) => {
-                    let _ = res_tx.send(Err((err_filename, e.to_string())));
+                    let _ = res_tx.send(Err(LoadFailure {
+                        request_id: req_id,
+                        message: e.to_string(),
+                    }));
                     ctx.request_repaint(); 
                 }
             }
