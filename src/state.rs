@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender};
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use eframe::egui::{TextureHandle, Vec2}; 
 
 pub struct ViewerState {
@@ -18,57 +20,53 @@ pub struct ViewerState {
 
 // --- Image Data & Animation ---
     pub frames: Vec<TextureHandle>,
-    pub frame_durations: Vec<f64>, // Stored in seconds for easy math
+    pub frame_durations: Vec<f64>, 
     pub current_frame: usize,
     pub last_frame_time: Option<f64>,
     pub load_error: Option<String>,
     
-// --- Communication Channels ---
-    pub req_tx: Sender<PathBuf>,
+    // --- Async Communication ---
+    pub load_id: Arc<AtomicU64>, // Cancellation token
+    pub req_tx: Sender<(PathBuf, u64)>, // Sends (Path, VersionID)
     pub res_rx: Receiver<Result<crate::image_io::LoadedImage, (String, String)>>,
 
     // --- Playlist State ---
     pub current_folder: Option<PathBuf>,
     pub playlist: Vec<PathBuf>,
     pub current_index: usize,
-    pub sort_method: crate::scanner::SortMethod, // Store the active setting
-    pub dir_req_tx: Sender<crate::scanner::ScanRequest>, // Updated type
+    pub sort_method: crate::scanner::SortMethod, 
+    pub dir_req_tx: Sender<crate::scanner::ScanRequest>, 
     pub dir_res_rx: Receiver<crate::scanner::DirectoryState>,
 }
 
 impl ViewerState {
     pub fn new(
-        req_tx: Sender<PathBuf>,
+        req_tx: Sender<(PathBuf, u64)>,
         res_rx: Receiver<Result<crate::image_io::LoadedImage, (String, String)>>,
         dir_req_tx: Sender<crate::scanner::ScanRequest>,
         dir_res_rx: Receiver<crate::scanner::DirectoryState>
     ) -> Self {
-
         Self {
             is_fullscreen: false,
             current_file_name: String::new(),
-
             auto_fit: true,       
             scale: 1.0,           
             pan: Vec2::ZERO,
- 
             target_scale: None,
             target_pan: None,
             reset_start_time: None,
-
             frames: Vec::new(),
             frame_durations: Vec::new(),
             current_frame: 0,
             last_frame_time: None,
             load_error: None,
-
+            load_id: Arc::new(AtomicU64::new(0)),
             req_tx,
             res_rx,
-
             current_folder: None,
             playlist: Vec::new(),
             current_index: 0,
-            sort_method: crate::scanner::SortMethod::Natural, // Default sorting
+            sort_method: crate::scanner::SortMethod::Natural,
             dir_req_tx,
             dir_res_rx,
         }

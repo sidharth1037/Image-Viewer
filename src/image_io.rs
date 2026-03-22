@@ -1,6 +1,9 @@
 use eframe::egui;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
+// Added for versioning logic
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Represents a single frame of an image, ready for GPU upload.
 pub struct ImageFrame {
@@ -116,23 +119,22 @@ fn apply_exif_orientation(
     }
 }
 
-/// Spawns a dedicated background thread for heavy image decoding.
-/// Returns a Sender to request paths, and a Receiver to get the decoded pixels.
+/// Spawns a dedicated background thread for heavy image decoding with versioning.
+/// Returns a Sender to request (Path, ID) pairs, and a Receiver for decoded pixels.
 pub fn spawn_image_loader(
     ctx: egui::Context,
-) -> (Sender<PathBuf>, Receiver<Result<LoadedImage, (String, String)>>) {
-    let (req_tx, req_rx) = channel::<PathBuf>();
+    id_tracker: Arc<AtomicU64>, // Added tracker to monitor for stale requests
+) -> (Sender<(PathBuf, u64)>, Receiver<Result<LoadedImage, (String, String)>>) {
+    let (req_tx, req_rx) = channel::<(PathBuf, u64)>();
     let (res_tx, res_rx) = channel::<Result<LoadedImage, (String, String)>>();
 
     std::thread::spawn(move || {
-        while let Ok(mut path) = req_rx.recv() {
+        while let Ok((mut path, mut req_id)) = req_rx.recv() {
             
             // --- QUEUE DRAIN OPTIMIZATION ---
-            // If the user rapidly skips through images (e.g., holding arrow keys),
-            // this loop grabs the absolute newest request and discards the stale ones,
-            // preventing the background thread from building up a massive backlog.
-            while let Ok(newer_path) = req_rx.try_recv() {
+            while let Ok((newer_path, newer_id)) = req_rx.try_recv() {
                 path = newer_path;
+                req_id = newer_id;
             }
 
             let filename = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
@@ -140,11 +142,12 @@ pub fn spawn_image_loader(
 
             let res = (|| -> Result<LoadedImage, Box<dyn std::error::Error + Send + Sync>> {
                 
-                // 1. Instantly read file bytes into RAM
+                // VERSION CHECK: Abort if a newer request was sent before we read the file
+                if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
                 let file_bytes = std::fs::read(&path)?;
                 
-                // --- Read EXIF Orientation Tag ---
-                // We use kamadak-exif to find the hidden orientation rule before we decode
+                // VERSION CHECK: Abort before EXIF parsing if request is now stale
+                if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
                 let exif_orientation = match exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&file_bytes)) {
                     Ok(exif) => match exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
                         Some(field) => field.value.get_uint(0).unwrap_or(1) as u32,
@@ -169,8 +172,11 @@ pub fn spawn_image_loader(
                 } else if file_bytes.starts_with(&[0xFF, 0x0A]) || file_bytes.starts_with(&[0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L']) {
                     "jxl"
                 } else {
-                    ext_fallback.as_str() // Fallback to extension if magic bytes are unknown
+                    ext_fallback.as_str() 
                 };
+
+                // VERSION CHECK: Abort before the heavy decoding step
+                if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
 
                 // 3. Decode bytes using the most optimal crate available
                 let (width, height, frames) = match format_str {
@@ -279,6 +285,9 @@ pub fn spawn_image_loader(
                         
                         // Automatically handles complex disposal methods and delta blending
                         for (i, frame_res) in decoder.into_frames().enumerate() {
+                            // VERSION CHECK: Abort mid-GIF if a newer image was requested
+                            if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
+                            
                             let frame = frame_res.map_err(|e| format!("GIF Frame Error: {}", e))?;
                             let img = frame.buffer();
                             
@@ -311,13 +320,18 @@ pub fn spawn_image_loader(
                     }
                 };
 
+                // VERSION CHECK: Final check before starting orientation math
+                if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
+
                 // --- Apply EXIF Rotation to all decoded frames ---
                 let mut oriented_frames = Vec::with_capacity(frames.len());
                 let mut final_w = width;
                 let mut final_h = height;
 
                 for frame in frames {
-                    // Send pixel data through the physical rearranger
+                    // VERSION CHECK: Abort if request is now stale
+                    if id_tracker.load(Ordering::Relaxed) != req_id { return Err("Stale Request".into()); }
+                    
                     let (nw, nh, npix) = apply_exif_orientation(frame.pixels, width, height, exif_orientation);
                     final_w = nw;
                     final_h = nh;
@@ -330,11 +344,14 @@ pub fn spawn_image_loader(
                 Ok(LoadedImage { filename, width: final_w, height: final_h, frames: oriented_frames })
             })();
 
-            // 4. Send the result and wake up the UI thread for an immediate frame update
+            // 4. Send the result ONLY IF it is not stale
             match res {
                 Ok(loaded_image) => {
                     let _ = res_tx.send(Ok(loaded_image));
                     ctx.request_repaint(); 
+                }
+                Err(e) if e.to_string() == "Stale Request" => {
+                    // Silently drop stale results
                 }
                 Err(e) => {
                     let _ = res_tx.send(Err((err_filename, e.to_string())));

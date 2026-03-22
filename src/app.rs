@@ -36,17 +36,21 @@ pub struct ImageApp {
 impl ImageApp {
     pub fn new(cc: &eframe::CreationContext<'_>, initial_file: Option<String>) -> Self {
         
-        let (req_tx, res_rx) = crate::image_io::spawn_image_loader(cc.egui_ctx.clone());
+        // --- Versioning & Loading Setup ---
+        let load_id = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let (req_tx, res_rx) = crate::image_io::spawn_image_loader(cc.egui_ctx.clone(), load_id.clone());
         let (dir_req_tx, dir_res_rx) = crate::scanner::spawn_directory_scanner(); 
         
         let mut state = ViewerState::new(req_tx, res_rx, dir_req_tx, dir_res_rx);
+        state.load_id = load_id; // Share the version tracker with the background loader
 
         if let Some(path_str) = initial_file {
             let path = std::path::PathBuf::from(&path_str);
             if let Some(name) = path.file_name() {
                 state.current_file_name = name.to_string_lossy().into_owned();
             }
-            let _ = state.req_tx.send(path.clone());
+            // Send initial request with version 0
+            let _ = state.req_tx.send((path.clone(), 0));
             let _ = state.dir_req_tx.send(crate::scanner::ScanRequest {
                 target_path: path,
                 sort_method: state.sort_method,
@@ -93,11 +97,20 @@ impl eframe::App for ImageApp {
         // 2. Render UI Layers
         ui::topbar::render(self, ctx);
         ui::settings::render(self, ctx); 
+        
+        // Capture navigation actions from the canvas
+        let mut nav_action = None;
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
             .show(ctx, |ui| {
-                ui::canvas::render(ctx, ui, &mut self.state);
+                // Pass the loop setting down and get the click result
+                nav_action = ui::canvas::render(ctx, ui, &mut self.state, self.settings.loop_playlist);
             });
+            
+        // Trigger navigation if an edge was clicked
+        if let Some(direction) = nav_action {
+            handlers::navigate(self, direction);
+        }
             
         // 3. Custom Window Border (Only when windowed)
         if !self.state.is_fullscreen {
