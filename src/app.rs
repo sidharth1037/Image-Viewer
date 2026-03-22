@@ -89,6 +89,7 @@ impl eframe::App for ImageApp {
         
         // 2. Render UI Layers
         ui::topbar::render(self, ctx);
+        ui::bottom_bar::render(self, ctx);
         ui::settings::render(self, ctx); 
         
         // Capture navigation actions from the canvas

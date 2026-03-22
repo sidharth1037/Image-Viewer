@@ -7,6 +7,7 @@ use eframe::egui::{TextureHandle, Vec2};
 pub struct ViewerState {
     // NOTE: This tracks viewport maximized state (not OS exclusive fullscreen mode).
     pub is_fullscreen: bool,
+    pub current_file_path: Option<PathBuf>,
     pub current_file_name: String,
     
     // --- Camera Math ---
@@ -24,6 +25,8 @@ pub struct ViewerState {
     pub frame_durations: Vec<f64>, 
     pub current_frame: usize,
     pub last_frame_time: Option<f64>,
+    pub image_resolution: Option<(u32, u32)>,
+    pub current_file_size_bytes: Option<u64>,
     pub load_error: Option<String>,
     
     // --- Async Communication ---
@@ -52,6 +55,7 @@ impl ViewerState {
     ) -> Self {
         Self {
             is_fullscreen: false,
+            current_file_path: None,
             current_file_name: String::new(),
             auto_fit: true,       
             scale: 1.0,           
@@ -63,6 +67,8 @@ impl ViewerState {
             frame_durations: Vec::new(),
             current_frame: 0,
             last_frame_time: None,
+            image_resolution: None,
+            current_file_size_bytes: None,
             load_error: None,
             load_id,
             req_tx,

@@ -22,10 +22,12 @@ pub fn open_target(app: &mut ImageApp, path: std::path::PathBuf) {
 }
 
 pub fn load_target_file(app: &mut ImageApp, path: std::path::PathBuf) {
+    app.state.current_file_path = Some(path.clone());
     if let Some(name) = path.file_name() {
         app.state.current_file_name = name.to_string_lossy().into_owned();
         app.cached_title.clear();
     }
+    app.state.current_file_size_bytes = std::fs::metadata(&path).ok().map(|m| m.len());
     
     // Atomically increment ID to notify the background thread to abort current work
     let current_id = app.state.load_id.fetch_add(1, Ordering::AcqRel) + 1;
@@ -33,6 +35,7 @@ pub fn load_target_file(app: &mut ImageApp, path: std::path::PathBuf) {
     app.state.frames.clear();
     app.state.frame_durations.clear();
     app.state.current_frame = 0;
+    app.state.image_resolution = None;
     app.state.load_error = None;
     app.state.auto_fit = true;
     app.state.pan = egui::Vec2::ZERO;
@@ -72,6 +75,7 @@ pub fn process_image_loading(app: &mut ImageApp, ctx: &egui::Context) {
                 app.state.frame_durations.clear();
                 app.state.current_frame = 0;
                 app.state.last_frame_time = None;
+                app.state.image_resolution = Some((loaded_image.width, loaded_image.height));
 
                 for (i, frame) in loaded_image.frames.iter().enumerate() {
                     let color_image = egui::ColorImage::from_rgba_unmultiplied(
@@ -94,6 +98,7 @@ pub fn process_image_loading(app: &mut ImageApp, ctx: &egui::Context) {
                     return;
                 }
                 app.state.frames.clear();
+                app.state.image_resolution = None;
                 app.state.load_error = Some(format!("Unsupported or invalid file:\n{}", load_failure.message));
             }
         }

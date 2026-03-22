@@ -2,34 +2,44 @@ use eframe::egui;
 use crate::app::ImageApp;
 use egui_phosphor::regular as icons;
 
+const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
+
+fn is_bar_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
+    let bottom_trigger = ctx.content_rect().max.y - EDGE_TRIGGER_HEIGHT;
+
+    match ctx.pointer_hover_pos() {
+        Some(pos) => pos.y < EDGE_TRIGGER_HEIGHT || pos.y >= bottom_trigger,
+        None => {
+            #[cfg(windows)]
+            {
+                app.is_focused && app.hwnd.is_some_and(|h| {
+                    let y = crate::win32::get_cursor_client_y(h) as f32;
+                    (y >= 0.0 && y < EDGE_TRIGGER_HEIGHT) || y >= bottom_trigger
+                })
+            }
+            #[cfg(not(windows))]
+            {
+                false
+            }
+        }
+    }
+}
+
 pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
     // --- SETTINGS INTEGRATION ---
     let is_immersive = app.state.is_fullscreen && app.settings.immersive_maximized;
 
     if is_immersive {
-        let mut near_top = match ctx.pointer_hover_pos() {
-            Some(pos) => pos.y < 34.0,
-            None => {
-                #[cfg(windows)]
-                {
-                    app.is_focused && app.hwnd.is_some_and(|h| {
-                        let y = crate::win32::get_cursor_client_y(h);
-                        y >= 0 && y < 34
-                    })
-                }
-                #[cfg(not(windows))]
-                false
-            }
-        };
+        let mut show_bars = is_bar_visible_in_immersive(app, ctx);
 
         // --- THE FIX: KEEP OPEN IF DROPDOWN IS ACTIVE ---
         // If the user has clicked the combo box, egui registers a popup.
         // We force the top bar to stay visible until they click away.
         if egui::Popup::is_any_open(ctx) {
-            near_top = true;
+            show_bars = true;
         }
 
-        if near_top {
+        if show_bars {
             egui::Area::new(egui::Id::new("top_bar_overlay"))
                 .fixed_pos(egui::pos2(0.0, 0.0))
                 .order(egui::Order::Foreground)
