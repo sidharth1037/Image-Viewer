@@ -30,13 +30,23 @@ pub fn render(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut ViewerState, l
         }
     }
 
-    let pointer_pos = response.interact_pointer_pos().or(response.hover_pos());
+    // Child UIs (like error labels) can steal hover from `response`, so keep a global fallback.
+    let pointer_pos = response
+        .interact_pointer_pos()
+        .or(response.hover_pos())
+        .or(ctx.pointer_hover_pos());
     let left_zone_bound = response.rect.min.x + canvas_size.x * 0.08;
     let right_zone_bound = response.rect.max.x - canvas_size.x * 0.08;
+    let pointer_in_canvas = pointer_pos.map_or(false, |p| response.rect.contains(p));
     
-    let in_left_zone = pointer_pos.map_or(false, |p| p.x < left_zone_bound);
-    let in_right_zone = pointer_pos.map_or(false, |p| p.x > right_zone_bound);
+    let in_left_zone = pointer_in_canvas && pointer_pos.map_or(false, |p| p.x < left_zone_bound);
+    let in_right_zone = pointer_in_canvas && pointer_pos.map_or(false, |p| p.x > right_zone_bound);
     let in_nav_zone = in_left_zone || in_right_zone;
+
+    // Keep edge affordance consistent: always show hand cursor in navigation zones.
+    if in_nav_zone {
+        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
 
     let is_zoomed_in = state.scale > fit_scale * 1.0001;
 
@@ -57,7 +67,15 @@ pub fn render(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut ViewerState, l
     // Navigation Input: Handles clicks and double-clicks within the 8% edge zones.
     // Double clicks in these zones will navigate twice rather than triggering zoom.
     if state.reset_start_time.is_none() {
-        if response.clicked() || response.double_clicked() {
+        let clicked_on_canvas = ctx.input(|i| {
+            i.pointer.button_clicked(egui::PointerButton::Primary)
+                && i
+                    .pointer
+                    .interact_pos()
+                    .map_or(false, |p| response.rect.contains(p))
+        });
+
+        if response.clicked() || response.double_clicked() || clicked_on_canvas {
             if in_left_zone && has_prev {
                 nav_action = Some(-1);
             } else if in_right_zone && has_next {
@@ -208,9 +226,12 @@ pub fn render(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut ViewerState, l
         );
         
         if let Some(err) = &state.load_error {
-            child_ui.label(egui::RichText::new(err).color(child_ui.visuals().error_fg_color));
+            child_ui.add(
+                egui::Label::new(egui::RichText::new(err).color(child_ui.visuals().error_fg_color))
+                    .selectable(false),
+            );
         } else if state.current_file_name.is_empty() {
-            child_ui.label("No image loaded.\nDrag and drop an image here.");
+            child_ui.add(egui::Label::new("No image loaded.\nDrag and drop an image here.").selectable(false));
         } else {
             child_ui.spinner();
         }
@@ -219,7 +240,7 @@ pub fn render(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut ViewerState, l
     // Persistent Arrow Overlays
     // Rendered completely outside image-loading logic to prevent flashing
     if playlist_len > 1 && state.reset_start_time.is_none() && !state.current_file_name.is_empty() {
-        if let Some(_) = response.hover_pos() {
+        if pointer_pos.is_some() {
             let center_y = response.rect.center().y;
             
             if has_prev && in_left_zone {

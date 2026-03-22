@@ -31,6 +31,8 @@ pub struct ImageApp {
 
     // Track if the settings menu is open
     pub show_settings_window: bool,
+    pub show_sort_menu: bool,
+    pub sort_menu_pos: Option<egui::Pos2>,
 }
 
 impl ImageApp {
@@ -67,6 +69,8 @@ impl ImageApp {
             cached_title: String::new(),
             last_title_width: 0.0,
             show_settings_window: false,
+            show_sort_menu: false,
+            sort_menu_pos: None,
         };
 
         if let Some(path_str) = initial_file {

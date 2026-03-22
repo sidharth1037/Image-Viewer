@@ -45,6 +45,8 @@ fn is_bottom_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
 fn render_content(app: &ImageApp, ui: &mut egui::Ui) {
     let has_loaded_image = !app.state.frames.is_empty() && app.state.load_error.is_none();
     if !has_loaded_image {
+        // Keep the bar geometry stable even with no visible text.
+        ui.allocate_space(egui::vec2(ui.available_width(), ui.available_height().max(1.0)));
         return;
     }
 
@@ -87,7 +89,8 @@ pub fn render(app: &ImageApp, ctx: &egui::Context) {
     let is_immersive = app.state.is_fullscreen && app.settings.immersive_maximized;
 
     if is_immersive {
-        if is_bottom_visible_in_immersive(app, ctx) {
+        let show_bars = app.show_sort_menu || is_bottom_visible_in_immersive(app, ctx);
+        if show_bars {
             egui::Area::new(egui::Id::new("bottom_bar_overlay"))
                 .fixed_pos(egui::pos2(0.0, ctx.content_rect().max.y - BOTTOM_BAR_HEIGHT))
                 .order(egui::Order::Foreground)
@@ -97,7 +100,7 @@ pub fn render(app: &ImageApp, ctx: &egui::Context) {
                         egui::Stroke::new(1.0, ui.visuals().strong_text_color().gamma_multiply(0.8));
 
                     egui::Frame::menu(ui.style()).stroke(active_stroke).show(ui, |ui| {
-                        ui.set_height(BOTTOM_BAR_HEIGHT);
+                        ui.set_min_height(BOTTOM_BAR_HEIGHT);
                         render_content(app, ui);
                     });
                 });

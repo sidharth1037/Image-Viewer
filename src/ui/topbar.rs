@@ -1,8 +1,39 @@
-use eframe::egui;
+use eframe::egui::{self};
 use crate::app::ImageApp;
 use egui_phosphor::regular as icons;
 
 const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
+const SORT_POPUP_ID: &str = "sort_hover_menu";
+
+fn padded_left_row_button(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
+    const H_PADDING: f32 = 10.0;
+
+    let row_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    let (rect, response) = ui.allocate_exact_size(row_size, egui::Sense::click());
+
+    if ui.is_rect_visible(rect) {
+        let visuals = &ui.style().visuals;
+        let widget = if selected {
+            &visuals.widgets.active
+        } else if response.hovered() {
+            &visuals.widgets.hovered
+        } else {
+            &visuals.widgets.inactive
+        };
+
+        ui.painter().rect_filled(rect, widget.corner_radius, widget.bg_fill);
+
+        ui.painter().text(
+            egui::pos2(rect.left() + H_PADDING, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::TextStyle::Button.resolve(ui.style()),
+            widget.fg_stroke.color,
+        );
+    }
+
+    response.clicked()
+}
 
 fn is_bar_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
     let bottom_trigger = ctx.content_rect().max.y - EDGE_TRIGGER_HEIGHT;
@@ -33,9 +64,8 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
         let mut show_bars = is_bar_visible_in_immersive(app, ctx);
 
         // --- THE FIX: KEEP OPEN IF DROPDOWN IS ACTIVE ---
-        // If the user has clicked the combo box, egui registers a popup.
-        // We force the top bar to stay visible until they click away.
-        if egui::Popup::is_any_open(ctx) {
+        // We force the top bar to stay visible if our custom hover menu is open.
+        if app.show_sort_menu {
             show_bars = true;
         }
 
@@ -80,7 +110,9 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             });
 
         let rect = panel_res.response.rect;
-        ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("title_line")))
+        
+        // Z-INDEX FIX: Render line on Middle order so it stays cleanly under popups
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("title_line")))
             .hline(rect.x_range(), rect.bottom(), panel_stroke);
     }
 }
@@ -182,29 +214,96 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 crate::scanner::SortMethod::DateCreated => format!("{} Created", icons::CALENDAR_PLUS),
             };
 
-            // Style the popup locally to avoid global context style churn every frame.
-            ui.scope(|ui| {
-                let style = ui.style_mut();
-                style.visuals.window_fill = egui::Color32::TRANSPARENT;
-                style.visuals.window_stroke = egui::Stroke::NONE;
-                style.visuals.popup_shadow = egui::epaint::Shadow::NONE;
-                style.spacing.menu_margin = egui::Margin::same(0);
+            let popup_id = egui::Id::new(SORT_POPUP_ID);
 
-                egui::ComboBox::from_id_salt("sort_combo_box")
-                    .selected_text(sort_label)
-                    .width(110.0)
-                    .show_ui(ui, |ui| {
-                        ui.add_space(14.0);
+            // 1. Draw the Toggle Button
+            let btn_res = ui.button(sort_label);
+            if btn_res.clicked() {
+                if app.show_sort_menu {
+                    app.show_sort_menu = false;
+                    app.sort_menu_pos = None;
+                } else {
+                    app.show_sort_menu = true;
+                    app.sort_menu_pos = Some(egui::pos2(btn_res.rect.left(), btn_res.rect.bottom() + 10.0));
+                }
+            }
 
+            // 2. Draw the Hovering Menu Area if open
+            if app.show_sort_menu {
+                let popup_pos = app
+                    .sort_menu_pos
+                    .unwrap_or_else(|| egui::pos2(btn_res.rect.left(), btn_res.rect.bottom() + 10.0));
+
+                let mut selected_sort_option = false;
+
+                let area_res = egui::Area::new(popup_id)
+                    // Keep a visible gap so it feels detached from the trigger button.
+                    .fixed_pos(popup_pos)
+                    .order(egui::Order::Tooltip)
+                    .show(ctx, |ui| {
+                        // Use a native menu frame for the background
                         egui::Frame::menu(ui.style()).show(ui, |ui| {
-                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Alphabetical, "Name (Alphabetical)").changed();
-                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Natural, "Name (Natural)").changed();
-                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::Size, "Size").changed();
-                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::DateModified, "Date Modified").changed();
-                            sort_changed |= ui.selectable_value(&mut app.state.sort_method, crate::scanner::SortMethod::DateCreated, "Date Created").changed();
+                            // FIXED: Force a strict width. Because Area is an unconstrained floating 
+                            // container, `available_width()` otherwise extends to the edge of the screen!
+                            ui.set_width(170.0);
+
+                            let alpha_selected = app.state.sort_method == crate::scanner::SortMethod::Alphabetical;
+                            let changed_alpha = padded_left_row_button(ui, "Name (Alphabetical)", alpha_selected);
+                            if changed_alpha {
+                                app.state.sort_method = crate::scanner::SortMethod::Alphabetical;
+                            }
+
+                            let natural_selected = app.state.sort_method == crate::scanner::SortMethod::Natural;
+                            let changed_natural = padded_left_row_button(ui, "Name (Natural)", natural_selected);
+                            if changed_natural {
+                                app.state.sort_method = crate::scanner::SortMethod::Natural;
+                            }
+
+                            let size_selected = app.state.sort_method == crate::scanner::SortMethod::Size;
+                            let changed_size = padded_left_row_button(ui, "Size", size_selected);
+                            if changed_size {
+                                app.state.sort_method = crate::scanner::SortMethod::Size;
+                            }
+
+                            let modified_selected = app.state.sort_method == crate::scanner::SortMethod::DateModified;
+                            let changed_modified = padded_left_row_button(ui, "Date Modified", modified_selected);
+                            if changed_modified {
+                                app.state.sort_method = crate::scanner::SortMethod::DateModified;
+                            }
+
+                            let created_selected = app.state.sort_method == crate::scanner::SortMethod::DateCreated;
+                            let changed_created = padded_left_row_button(ui, "Date Created", created_selected);
+                            if changed_created {
+                                app.state.sort_method = crate::scanner::SortMethod::DateCreated;
+                            }
+
+                            selected_sort_option = changed_alpha
+                                || changed_natural
+                                || changed_size
+                                || changed_modified
+                                || changed_created;
+
+                            sort_changed |= selected_sort_option;
                         });
                     });
-            });
+
+                if selected_sort_option {
+                    app.show_sort_menu = false;
+                    app.sort_menu_pos = None;
+                }
+
+                // 3. Close popup logic if clicked outside
+                if app.show_sort_menu && ctx.input(|i| i.pointer.any_pressed()) {
+                    let clicked_outside = ctx.pointer_interact_pos().map_or(false, |pos| {
+                        !area_res.response.rect.contains(pos) && !btn_res.rect.contains(pos)
+                    });
+                    
+                    if clicked_outside || sort_changed {
+                        app.show_sort_menu = false;
+                        app.sort_menu_pos = None;
+                    }
+                }
+            }
 
             // If the user picked a new method, instantly trigger a background rescan
             if sort_changed {
