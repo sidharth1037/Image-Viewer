@@ -45,8 +45,8 @@ fn is_bottom_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
 fn render_content(app: &ImageApp, ui: &mut egui::Ui) {
     let has_loaded_image = !app.state.frames.is_empty() && app.state.load_error.is_none();
     if !has_loaded_image {
-        // Keep the bar geometry stable even with no visible text.
-        ui.allocate_space(egui::vec2(ui.available_width(), ui.available_height().max(1.0)));
+        // Keep geometry stable without consuming the full unconstrained overlay height.
+        ui.allocate_space(egui::vec2(ui.available_width(), BOTTOM_BAR_HEIGHT));
         return;
     }
 
@@ -96,11 +96,12 @@ pub fn render(app: &ImageApp, ctx: &egui::Context) {
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     ui.set_width(ctx.content_rect().width());
+                    ui.set_height(BOTTOM_BAR_HEIGHT);
                     let active_stroke =
                         egui::Stroke::new(1.0, ui.visuals().strong_text_color().gamma_multiply(0.8));
 
                     egui::Frame::menu(ui.style()).stroke(active_stroke).show(ui, |ui| {
-                        ui.set_min_height(BOTTOM_BAR_HEIGHT);
+                        ui.set_height(BOTTOM_BAR_HEIGHT);
                         render_content(app, ui);
                     });
                 });
