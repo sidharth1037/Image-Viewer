@@ -156,7 +156,11 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             app.last_title_width = avail_px;
         }
 
-        let text_color = if app.is_focused { ui.visuals().strong_text_color() } else { ui.visuals().text_color().gamma_multiply(0.8) };
+        let text_color = if app.is_focused { 
+                ui.visuals().strong_text_color().gamma_multiply(0.8)
+            } else {
+                ui.visuals().text_color().gamma_multiply(0.8)
+            };
         ui.add(egui::Label::new(egui::RichText::new(&app.cached_title).color(text_color)).selectable(false));
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
