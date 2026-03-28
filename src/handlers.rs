@@ -17,6 +17,8 @@ pub fn request_directory_scan(app: &mut ImageApp, target_path: std::path::PathBu
 
 /// Queues both image loading and directory scanning through the same runtime paths.
 pub fn open_target(app: &mut ImageApp, path: std::path::PathBuf) {
+    // Opening a new target starts a fresh context; no previous preload on first entry.
+    app.state.preload.on_new_open();
     load_target_file(app, path.clone());
     request_directory_scan(app, path);
 }
@@ -28,13 +30,27 @@ pub fn load_target_file(app: &mut ImageApp, path: std::path::PathBuf) {
         app.cached_title.clear();
     }
     app.state.current_file_size_bytes = std::fs::metadata(&path).ok().map(|m| m.len());
-    
-    // Atomically increment ID to notify the background thread to abort current work
-    let current_id = app.state.load_id.fetch_add(1, Ordering::AcqRel) + 1;
 
+    reset_view_for_new_file(app);
+
+    app.state.preload.process_worker_results();
+    if let Some(cached) = app.state.preload.try_take_cached_for_path(&path) {
+        // Invalidate any foreground decode and use cached payload on the next UI tick.
+        let _ = app.state.load_id.fetch_add(1, Ordering::AcqRel);
+        app.state.preload.set_instant_current(cached);
+        return;
+    }
+
+    // Atomically increment ID to notify the background thread to abort current work.
+    let current_id = app.state.load_id.fetch_add(1, Ordering::AcqRel) + 1;
+    let _ = app.state.req_tx.send((path, current_id));
+}
+
+fn reset_view_for_new_file(app: &mut ImageApp) {
     app.state.frames.clear();
     app.state.frame_durations.clear();
     app.state.current_frame = 0;
+    app.state.last_frame_time = None;
     app.state.image_resolution = None;
     app.state.load_error = None;
     app.state.auto_fit = true;
@@ -42,8 +58,36 @@ pub fn load_target_file(app: &mut ImageApp, path: std::path::PathBuf) {
     app.state.target_scale = None;
     app.state.target_pan = None;
     app.state.reset_start_time = None;
-    
-    let _ = app.state.req_tx.send((path, current_id));
+}
+
+fn apply_loaded_image(app: &mut ImageApp, ctx: &egui::Context, loaded_image: crate::image_io::LoadedImage) {
+    app.state.frames.clear();
+    app.state.frame_durations.clear();
+    app.state.current_frame = 0;
+    app.state.last_frame_time = None;
+    app.state.image_resolution = Some((loaded_image.width, loaded_image.height));
+
+    for (i, frame) in loaded_image.frames.iter().enumerate() {
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(
+            [loaded_image.width as usize, loaded_image.height as usize],
+            &frame.pixels,
+        );
+        app.state.frames.push(ctx.load_texture(
+            format!("viewer_image_frame_{}", i),
+            color_image,
+            egui::TextureOptions::LINEAR,
+        ));
+        app.state.frame_durations.push(frame.duration_ms as f64 / 1000.0);
+    }
+    app.state.load_error = None;
+
+    if let Some(path) = app.state.current_file_path.clone() {
+        let index = app.state.current_index;
+        let playlist_snapshot = app.state.playlist.clone();
+        app.state
+            .preload
+            .on_current_image_ready(path, index, loaded_image, &playlist_snapshot, app.settings.loop_playlist);
+    }
 }
 
 pub fn sync_window_state(app: &mut ImageApp, ctx: &egui::Context) {
@@ -57,6 +101,13 @@ pub fn sync_window_state(app: &mut ImageApp, ctx: &egui::Context) {
 }
 
 pub fn process_image_loading(app: &mut ImageApp, ctx: &egui::Context) {
+    app.state.preload.process_worker_results();
+
+    if let Some(preloaded) = app.state.preload.take_instant_current() {
+        apply_loaded_image(app, ctx, preloaded);
+        return;
+    }
+
     let mut latest_result = None;
     while let Ok(result) = app.state.res_rx.try_recv() {
         latest_result = Some(result);
@@ -70,26 +121,7 @@ pub fn process_image_loading(app: &mut ImageApp, ctx: &egui::Context) {
                 if loaded_image.request_id != expected_id {
                     return;
                 }
-
-                app.state.frames.clear();
-                app.state.frame_durations.clear();
-                app.state.current_frame = 0;
-                app.state.last_frame_time = None;
-                app.state.image_resolution = Some((loaded_image.width, loaded_image.height));
-
-                for (i, frame) in loaded_image.frames.iter().enumerate() {
-                    let color_image = egui::ColorImage::from_rgba_unmultiplied(
-                        [loaded_image.width as usize, loaded_image.height as usize],
-                        &frame.pixels,
-                    );
-                    app.state.frames.push(ctx.load_texture(
-                        format!("viewer_image_frame_{}", i),
-                        color_image,
-                        egui::TextureOptions::LINEAR,
-                    ));
-                    app.state.frame_durations.push(frame.duration_ms as f64 / 1000.0);
-                }
-                app.state.load_error = None;
+                apply_loaded_image(app, ctx, loaded_image);
             }
             Err(load_failure) => {
                 // Prevent stale error flashes from outdated decode jobs.
@@ -132,6 +164,7 @@ pub fn navigate(app: &mut ImageApp, direction: i32) {
     }
 
     if let Some(new_index) = navigate_to {
+        app.state.preload.on_navigation_away();
         app.state.current_index = new_index;
         let next_path = app.state.playlist[new_index].clone();
         load_target_file(app, next_path);
@@ -162,6 +195,15 @@ pub fn process_directory_scanning(app: &mut ImageApp) {
         app.state.current_folder = Some(scan.folder_path);
         app.state.playlist = scan.playlist;
         app.state.current_index = scan.current_index;
+
+        let playlist_snapshot = app.state.playlist.clone();
+        let current_path = app.state.current_file_path.clone();
+        app.state.preload.on_playlist_updated(
+            &playlist_snapshot,
+            app.state.current_index,
+            app.settings.loop_playlist,
+            current_path.as_ref(),
+        );
     }
 }
 
@@ -169,14 +211,15 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
     ctx.input(|i| {
         if let Some(dropped_file) = i.raw.dropped_files.first() {
             if let Some(path) = &dropped_file.path {
-                load_target_file(app, path.clone());
+                app.state.preload.on_new_open();
+                let mut should_scan = false;
                 
                 if let Some(parent) = path.parent() {
                     if Some(parent.to_path_buf()) == app.state.current_folder {
                         if let Some(idx) = app.state.playlist.iter().position(|p| p == path) {
                             app.state.current_index = idx;
                         } else {
-                            request_directory_scan(app, path.clone());
+                            should_scan = true;
                         }
                     } else {
                         // --- THE FIX: PREVENT ASYNC RACE CONDITIONS ---
@@ -184,9 +227,13 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
                         app.state.current_folder = Some(parent.to_path_buf());
                         app.state.playlist.clear(); 
                         app.state.current_index = 0;
-
-                        request_directory_scan(app, path.clone());
+                        should_scan = true;
                     }
+                }
+
+                load_target_file(app, path.clone());
+                if should_scan {
+                    request_directory_scan(app, path.clone());
                 }
             }
         }

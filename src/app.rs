@@ -40,11 +40,14 @@ impl ImageApp {
         
         // --- Versioning & Loading Setup ---
         let load_id = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let preload_epoch = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let scan_id = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
         let (req_tx, res_rx) = crate::image_io::spawn_image_loader(cc.egui_ctx.clone(), load_id.clone());
+        let (preload_req_tx, preload_res_rx) = crate::image_io::spawn_image_loader_ordered(cc.egui_ctx.clone(), preload_epoch.clone());
         let (dir_req_tx, dir_res_rx) = crate::scanner::spawn_directory_scanner(scan_id.clone()); 
+        let preload = crate::preload::PreloadRing::new(preload_epoch, preload_req_tx, preload_res_rx);
         
-        let state = ViewerState::new(load_id, req_tx, res_rx, scan_id, dir_req_tx, dir_res_rx);
+        let state = ViewerState::new(load_id, req_tx, res_rx, scan_id, dir_req_tx, dir_res_rx, preload);
 
         #[cfg(windows)]
         let hwnd = {

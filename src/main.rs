@@ -5,6 +5,7 @@
 mod state;
 mod app;
 mod image_io;
+mod preload;
 mod scanner;
 mod ui;
 mod handlers;

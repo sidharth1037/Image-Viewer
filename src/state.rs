@@ -3,6 +3,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use eframe::egui::{TextureHandle, Vec2}; 
+use crate::preload::PreloadRing;
 
 pub struct ViewerState {
     // NOTE: This tracks viewport maximized state (not OS exclusive fullscreen mode).
@@ -42,6 +43,9 @@ pub struct ViewerState {
     pub scan_id: Arc<AtomicU64>, // Cancellation token for folder scans
     pub dir_req_tx: Sender<crate::scanner::ScanRequest>, 
     pub dir_res_rx: Receiver<crate::scanner::DirectoryState>,
+
+    // --- Preloading Ring Buffer ---
+    pub preload: PreloadRing,
 }
 
 impl ViewerState {
@@ -51,7 +55,8 @@ impl ViewerState {
         res_rx: Receiver<Result<crate::image_io::LoadedImage, crate::image_io::LoadFailure>>,
         scan_id: Arc<AtomicU64>,
         dir_req_tx: Sender<crate::scanner::ScanRequest>,
-        dir_res_rx: Receiver<crate::scanner::DirectoryState>
+        dir_res_rx: Receiver<crate::scanner::DirectoryState>,
+        preload: PreloadRing,
     ) -> Self {
         Self {
             is_fullscreen: false,
@@ -80,6 +85,7 @@ impl ViewerState {
             scan_id,
             dir_req_tx,
             dir_res_rx,
+            preload,
         }
     }
 }
