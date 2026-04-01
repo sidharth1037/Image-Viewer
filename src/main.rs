@@ -1,5 +1,5 @@
 // This attribute tells Windows not to open a console window when the app starts.
-// #![windows_subsystem = "windows"]
+#![windows_subsystem = "windows"]
 
 // Declare our modules (links the .rs files)
 mod state;

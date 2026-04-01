@@ -84,9 +84,16 @@ impl PreloadRing {
         self.instant_current = None;
     }
 
-    pub fn on_navigation_away(&mut self) {
+    pub fn on_navigation_away(&mut self, direction: i32) {
         if let Some(current) = self.current.take() {
-            self.prev = Some(current);
+            if direction < 0 {
+                // Moving backward: keep the outgoing image in the forward cache path.
+                self.next2 = self.next1.take();
+                self.next1 = Some(current);
+            } else {
+                // Moving forward (or unknown): keep the outgoing image as immediate previous.
+                self.prev = Some(current);
+            }
         }
     }
 

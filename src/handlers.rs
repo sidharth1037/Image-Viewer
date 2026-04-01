@@ -164,7 +164,7 @@ pub fn navigate(app: &mut ImageApp, direction: i32) {
     }
 
     if let Some(new_index) = navigate_to {
-        app.state.preload.on_navigation_away();
+        app.state.preload.on_navigation_away(direction);
         app.state.current_index = new_index;
         let next_path = app.state.playlist[new_index].clone();
         load_target_file(app, next_path);
