@@ -4,6 +4,8 @@
 /// Positive values brighten, negative values darken.
 /// The correction formula: `output = 255 * (input/255)^(1 / (1 + value))`
 
+use super::scalar;
+
 pub struct GammaAdjustment {
     pub value: f32,
 }
@@ -25,12 +27,17 @@ impl GammaAdjustment {
 
     /// Returns true if gamma is at the neutral (identity) value.
     pub fn is_neutral(&self) -> bool {
-        self.value.abs() < f32::EPSILON
+        scalar::is_neutral_value(self.value)
     }
 
     /// Resets gamma to the neutral value.
     pub fn reset(&mut self) {
         self.value = 0.0;
+    }
+
+    /// Applies a signed delta to gamma and clamps it to valid bounds.
+    pub fn adjust_by(&mut self, delta: f32) -> bool {
+        scalar::apply_delta_clamped(&mut self.value, delta, Self::MIN, Self::MAX)
     }
 
     /// Pre-computes a 256-entry lookup table for the current gamma value.

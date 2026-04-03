@@ -8,12 +8,14 @@ pub struct AppSettings {
     /// True = Top bar hides when maximized (Immersive). False = Permanent Top bar.
     pub immersive_maximized: bool, 
     pub loop_playlist: bool,
+    pub shortcuts: crate::shortcuts::ShortcutConfig,
 }
 impl Default for AppSettings {
     fn default() -> Self {
         Self { 
             immersive_maximized: true,
-            loop_playlist: false
+            loop_playlist: false,
+            shortcuts: crate::shortcuts::ShortcutConfig::default(),
         }
     }
 }

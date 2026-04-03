@@ -233,8 +233,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 .add(egui::Button::new(sort_controls::order_icon(app.state.sort_order)))
                 .on_hover_text(sort_controls::order_tooltip(app.state.sort_order));
             if order_res.clicked() {
-                app.state.sort_order = app.state.sort_order.toggled();
-                sort_changed = true;
+                crate::handlers::set_sort_order(app, app.state.sort_order.toggled());
             }
 
             let has_playlist = !app.state.playlist.is_empty();
@@ -245,14 +244,14 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 .add_enabled(can_jump_last, egui::Button::new(icons::ARROW_LINE_RIGHT))
                 .on_hover_text("Jump to last item");
             if jump_last_res.clicked() {
-                jump_to_playlist_edge(app, true);
+                crate::handlers::jump_to_playlist_edge(app, true);
             }
 
             let jump_first_res = ui
                 .add_enabled(can_jump_first, egui::Button::new(icons::ARROW_LINE_LEFT))
                 .on_hover_text("Jump to first item");
             if jump_first_res.clicked() {
-                jump_to_playlist_edge(app, false);
+                crate::handlers::jump_to_playlist_edge(app, false);
             }
 
             // 2. Draw the Hovering Menu Area if open
@@ -313,50 +312,8 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
             // If the user picked a new method, instantly trigger a background rescan
             if sort_changed {
-                trigger_sort_rescan(app);
+                crate::handlers::rescan_current_sort(app);
             }
         });
     });
-}
-
-fn current_sort_target_path(app: &ImageApp) -> Option<std::path::PathBuf> {
-    if !app.state.playlist.is_empty() {
-        return Some(app.state.playlist[app.state.current_index].clone());
-    }
-
-    if let Some(folder) = &app.state.current_folder {
-        if !app.state.current_file_name.is_empty() {
-            return Some(folder.join(&app.state.current_file_name));
-        }
-    }
-
-    None
-}
-
-fn trigger_sort_rescan(app: &mut ImageApp) {
-    if let Some(path) = current_sort_target_path(app) {
-        crate::handlers::request_directory_scan(app, path);
-    }
-}
-
-fn jump_to_playlist_edge(app: &mut ImageApp, to_last: bool) {
-    if app.state.playlist.is_empty() {
-        return;
-    }
-
-    let target_index = if to_last {
-        app.state.playlist.len() - 1
-    } else {
-        0
-    };
-
-    if app.state.current_index == target_index {
-        return;
-    }
-
-    let direction = if to_last { 1 } else { -1 };
-    app.state.preload.on_navigation_away(direction);
-    app.state.current_index = target_index;
-    let target_path = app.state.playlist[target_index].clone();
-    crate::handlers::load_target_file(app, target_path);
 }

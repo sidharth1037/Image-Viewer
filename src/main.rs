@@ -8,6 +8,7 @@ mod adjustments;
 mod image_io;
 mod preload;
 mod scanner;
+mod shortcuts;
 mod ui;
 mod handlers;
 #[cfg(windows)]

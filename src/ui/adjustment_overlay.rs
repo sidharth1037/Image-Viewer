@@ -1,5 +1,5 @@
-/// Renders a temporary on-screen overlay showing the current adjustment values.
-/// The overlay appears when an adjustment changes, then fades out after a short duration.
+/// Renders a temporary on-screen overlay showing the latest adjustment or shortcut hint.
+/// The overlay appears when a new hint is pushed, then fades out after a short duration.
 
 use eframe::egui;
 use crate::state::ViewerState;
@@ -63,11 +63,15 @@ fn paint_outlined_text(
     );
 }
 
-/// Renders the adjustment overlay if any values were recently changed.
+/// Renders the overlay if a hint was recently pushed.
 /// Call this from the main update loop. It will automatically fade out and
 /// request repaints only while the overlay is visible.
 pub fn render(ctx: &egui::Context, state: &ViewerState) {
-    let last_changed = match state.adjustments_last_changed {
+    let last_changed = match state.overlay_last_changed {
+        Some(t) => t,
+        None => return,
+    };
+    let text = match &state.overlay_text {
         Some(t) => t,
         None => return,
     };
@@ -88,10 +92,6 @@ pub fn render(ctx: &egui::Context, state: &ViewerState) {
         (1.0 - fade_progress as f32).max(0.0)
     };
 
-    // Build the display text for all active adjustments
-    let gamma_val = state.adjustments.gamma.value;
-    let text = format!("Gamma: {:+.2}", gamma_val);
-
     // Paint on the foreground layer so it's always visible above the image
     let painter = ctx.layer_painter(egui::LayerId::new(
         egui::Order::Foreground,
@@ -103,7 +103,7 @@ pub fn render(ctx: &egui::Context, state: &ViewerState) {
     paint_outlined_text(
         &painter,
         pos,
-        &text,
+        text,
         egui::FontId::proportional(18.0),
         alpha,
     );
