@@ -11,6 +11,7 @@ pub fn request_directory_scan(app: &mut ImageApp, target_path: std::path::PathBu
     let _ = app.state.dir_req_tx.send(crate::scanner::ScanRequest {
         target_path,
         sort_method: app.state.sort_method,
+        sort_order: app.state.sort_order,
         request_id,
     });
 }
@@ -106,6 +107,10 @@ pub fn sync_window_state(app: &mut ImageApp, ctx: &egui::Context) {
         app.state.is_fullscreen = is_maximized;
     }
     if let Some(focused) = ctx.input(|i| i.viewport().focused) {
+        if focused && !app.is_focused {
+            let now = ctx.input(|i| i.time);
+            app.focus_settle_until = now + 0.20;
+        }
         app.is_focused = focused;
     }
 }

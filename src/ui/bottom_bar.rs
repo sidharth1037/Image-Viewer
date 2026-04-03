@@ -22,6 +22,10 @@ fn format_file_size(bytes: u64) -> String {
 }
 
 fn is_bottom_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
+    if ctx.input(|i| i.time) < app.focus_settle_until {
+        return false;
+    }
+
     let bottom_trigger = ctx.content_rect().max.y - EDGE_TRIGGER_HEIGHT;
 
     match ctx.pointer_hover_pos() {

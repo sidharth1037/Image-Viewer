@@ -13,9 +13,35 @@ pub enum SortMethod {
     DateCreated,  // <-- NEW
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+impl SortOrder {
+    pub fn toggled(self) -> Self {
+        match self {
+            Self::Ascending => Self::Descending,
+            Self::Descending => Self::Ascending,
+        }
+    }
+}
+
+pub fn default_order_for(method: SortMethod) -> SortOrder {
+    match method {
+        SortMethod::Size => SortOrder::Descending,
+        SortMethod::Alphabetical
+        | SortMethod::Natural
+        | SortMethod::DateModified
+        | SortMethod::DateCreated => SortOrder::Ascending,
+    }
+}
+
 pub struct ScanRequest {
     pub target_path: PathBuf,
     pub sort_method: SortMethod,
+    pub sort_order: SortOrder,
     pub request_id: u64,
 }
 
@@ -130,6 +156,10 @@ pub fn spawn_directory_scanner(id_tracker: Arc<AtomicU64>) -> (Sender<ScanReques
 
                         playlist = with_meta.into_iter().map(|(p, _)| p).collect();
                     }
+                }
+
+                if request.sort_order == SortOrder::Descending {
+                    playlist.reverse();
                 }
 
                 let current_index = playlist.iter().position(|p| p == &request.target_path).unwrap_or(0);

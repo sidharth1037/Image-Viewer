@@ -41,6 +41,7 @@ pub struct ViewerState {
     pub playlist: Vec<PathBuf>,
     pub current_index: usize,
     pub sort_method: crate::scanner::SortMethod, 
+    pub sort_order: crate::scanner::SortOrder,
     pub scan_id: Arc<AtomicU64>, // Cancellation token for folder scans
     pub dir_req_tx: Sender<crate::scanner::ScanRequest>, 
     pub dir_res_rx: Receiver<crate::scanner::DirectoryState>,
@@ -89,6 +90,7 @@ impl ViewerState {
             playlist: Vec::new(),
             current_index: 0,
             sort_method: crate::scanner::SortMethod::Natural,
+            sort_order: crate::scanner::default_order_for(crate::scanner::SortMethod::Natural),
             scan_id,
             dir_req_tx,
             dir_res_rx,

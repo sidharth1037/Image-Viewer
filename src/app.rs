@@ -22,6 +22,7 @@ pub struct ImageApp {
     pub state: ViewerState,
     pub settings: AppSettings,
     pub is_focused: bool,
+    pub focus_settle_until: f64,
     #[cfg(windows)]
     pub hwnd: Option<isize>,
     
@@ -67,6 +68,7 @@ impl ImageApp {
             state,
             settings: AppSettings::default(),
             is_focused: true,
+            focus_settle_until: 0.0,
             #[cfg(windows)]
             hwnd,
             cached_title: String::new(),

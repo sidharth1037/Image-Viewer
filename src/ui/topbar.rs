@@ -1,5 +1,6 @@
 use eframe::egui::{self};
 use crate::app::ImageApp;
+use crate::ui::sort_controls;
 use egui_phosphor::regular as icons;
 
 const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
@@ -36,6 +37,10 @@ fn padded_left_row_button(ui: &mut egui::Ui, label: &str, selected: bool) -> boo
 }
 
 fn is_bar_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
+    if ctx.input(|i| i.time) < app.focus_settle_until {
+        return false;
+    }
+
     let bottom_trigger = ctx.content_rect().max.y - EDGE_TRIGGER_HEIGHT;
 
     match ctx.pointer_hover_pos() {
@@ -126,9 +131,8 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     ui.horizontal_centered(|ui| {
         ui.add_space(8.0);
         
-        // --- THE FIX: PREVENT TITLE OVERLAP ---
-        // Increased from 120.0 to 280.0 to account for the ComboBox and Settings button
-        let reserved_for_buttons: f32 = 280.0; 
+        // Keep enough room for window controls + settings + sort controls.
+        let reserved_for_buttons: f32 = 420.0;
         let avail_px = (ui.available_width() - reserved_for_buttons).max(0.0);
 
         if (app.last_title_width - avail_px).abs() > 5.0 || app.cached_title.is_empty() {
@@ -209,16 +213,8 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
             // --- Sorting Dropdown ---
             let mut sort_changed = false;
-            
-            let sort_label = match app.state.sort_method {
-                crate::scanner::SortMethod::Alphabetical => format!("{} Alphabetical", icons::SORT_ASCENDING),
-                crate::scanner::SortMethod::Natural => format!("{} Natural", icons::SORT_ASCENDING),
-                crate::scanner::SortMethod::Size => format!("{} Size", icons::ARROWS_DOWN_UP),
-                crate::scanner::SortMethod::DateModified => format!("{} Modified", icons::CLOCK),
-                crate::scanner::SortMethod::DateCreated => format!("{} Created", icons::CALENDAR_PLUS),
-            };
-
             let popup_id = egui::Id::new(SORT_POPUP_ID);
+            let sort_label = sort_controls::topbar_method_label(app.state.sort_method);
 
             // 1. Draw the Toggle Button
             let btn_res = ui.button(sort_label);
@@ -230,6 +226,33 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     app.show_sort_menu = true;
                     app.sort_menu_pos = Some(egui::pos2(btn_res.rect.left(), btn_res.rect.bottom() + 10.0));
                 }
+            }
+
+            // Dedicated icon-only button for switching ascending/descending.
+            let order_res = ui
+                .add(egui::Button::new(sort_controls::order_icon(app.state.sort_order)))
+                .on_hover_text(sort_controls::order_tooltip(app.state.sort_order));
+            if order_res.clicked() {
+                app.state.sort_order = app.state.sort_order.toggled();
+                sort_changed = true;
+            }
+
+            let has_playlist = !app.state.playlist.is_empty();
+            let can_jump_last = has_playlist && app.state.current_index + 1 < app.state.playlist.len();
+            let can_jump_first = has_playlist && app.state.current_index > 0;
+
+            let jump_last_res = ui
+                .add_enabled(can_jump_last, egui::Button::new(icons::ARROW_LINE_RIGHT))
+                .on_hover_text("Jump to last item");
+            if jump_last_res.clicked() {
+                jump_to_playlist_edge(app, true);
+            }
+
+            let jump_first_res = ui
+                .add_enabled(can_jump_first, egui::Button::new(icons::ARROW_LINE_LEFT))
+                .on_hover_text("Jump to first item");
+            if jump_first_res.clicked() {
+                jump_to_playlist_edge(app, false);
             }
 
             // 2. Draw the Hovering Menu Area if open
@@ -249,43 +272,18 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         egui::Frame::menu(ui.style()).show(ui, |ui| {
                             // FIXED: Force a strict width. Because Area is an unconstrained floating 
                             // container, `available_width()` otherwise extends to the edge of the screen!
-                            ui.set_width(170.0);
+                            ui.set_width(210.0);
 
-                            let alpha_selected = app.state.sort_method == crate::scanner::SortMethod::Alphabetical;
-                            let changed_alpha = padded_left_row_button(ui, "Name (Alphabetical)", alpha_selected);
-                            if changed_alpha {
-                                app.state.sort_method = crate::scanner::SortMethod::Alphabetical;
+                            for option in sort_controls::SORT_OPTIONS {
+                                let is_selected = app.state.sort_method == option.method;
+                                let label = sort_controls::popup_item_label(option.method);
+                                let changed = padded_left_row_button(ui, &label, is_selected);
+                                if changed {
+                                    app.state.sort_method = option.method;
+                                    app.state.sort_order = crate::scanner::default_order_for(option.method);
+                                    selected_sort_option = true;
+                                }
                             }
-
-                            let natural_selected = app.state.sort_method == crate::scanner::SortMethod::Natural;
-                            let changed_natural = padded_left_row_button(ui, "Name (Natural)", natural_selected);
-                            if changed_natural {
-                                app.state.sort_method = crate::scanner::SortMethod::Natural;
-                            }
-
-                            let size_selected = app.state.sort_method == crate::scanner::SortMethod::Size;
-                            let changed_size = padded_left_row_button(ui, "Size", size_selected);
-                            if changed_size {
-                                app.state.sort_method = crate::scanner::SortMethod::Size;
-                            }
-
-                            let modified_selected = app.state.sort_method == crate::scanner::SortMethod::DateModified;
-                            let changed_modified = padded_left_row_button(ui, "Date Modified", modified_selected);
-                            if changed_modified {
-                                app.state.sort_method = crate::scanner::SortMethod::DateModified;
-                            }
-
-                            let created_selected = app.state.sort_method == crate::scanner::SortMethod::DateCreated;
-                            let changed_created = padded_left_row_button(ui, "Date Created", created_selected);
-                            if changed_created {
-                                app.state.sort_method = crate::scanner::SortMethod::DateCreated;
-                            }
-
-                            selected_sort_option = changed_alpha
-                                || changed_natural
-                                || changed_size
-                                || changed_modified
-                                || changed_created;
 
                             sort_changed |= selected_sort_option;
                         });
@@ -299,7 +297,11 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 // 3. Close popup logic if clicked outside
                 if app.show_sort_menu && ctx.input(|i| i.pointer.any_pressed()) {
                     let clicked_outside = ctx.pointer_interact_pos().map_or(false, |pos| {
-                        !area_res.response.rect.contains(pos) && !btn_res.rect.contains(pos)
+                        !area_res.response.rect.contains(pos)
+                            && !btn_res.rect.contains(pos)
+                            && !order_res.rect.contains(pos)
+                            && !jump_last_res.rect.contains(pos)
+                            && !jump_first_res.rect.contains(pos)
                     });
                     
                     if clicked_outside || sort_changed {
@@ -311,24 +313,50 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
             // If the user picked a new method, instantly trigger a background rescan
             if sort_changed {
-                // Determine the target path safely, even if the playlist is currently empty
-                let target = if !app.state.playlist.is_empty() {
-                    Some(app.state.playlist[app.state.current_index].clone())
-                } else if let Some(folder) = &app.state.current_folder {
-                    if !app.state.current_file_name.is_empty() {
-                        Some(folder.join(&app.state.current_file_name))
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                };
-
-                // Send the new sort request
-                if let Some(path) = target {
-                    crate::handlers::request_directory_scan(app, path);
-                }
+                trigger_sort_rescan(app);
             }
         });
     });
+}
+
+fn current_sort_target_path(app: &ImageApp) -> Option<std::path::PathBuf> {
+    if !app.state.playlist.is_empty() {
+        return Some(app.state.playlist[app.state.current_index].clone());
+    }
+
+    if let Some(folder) = &app.state.current_folder {
+        if !app.state.current_file_name.is_empty() {
+            return Some(folder.join(&app.state.current_file_name));
+        }
+    }
+
+    None
+}
+
+fn trigger_sort_rescan(app: &mut ImageApp) {
+    if let Some(path) = current_sort_target_path(app) {
+        crate::handlers::request_directory_scan(app, path);
+    }
+}
+
+fn jump_to_playlist_edge(app: &mut ImageApp, to_last: bool) {
+    if app.state.playlist.is_empty() {
+        return;
+    }
+
+    let target_index = if to_last {
+        app.state.playlist.len() - 1
+    } else {
+        0
+    };
+
+    if app.state.current_index == target_index {
+        return;
+    }
+
+    let direction = if to_last { 1 } else { -1 };
+    app.state.preload.on_navigation_away(direction);
+    app.state.current_index = target_index;
+    let target_path = app.state.playlist[target_index].clone();
+    crate::handlers::load_target_file(app, target_path);
 }
