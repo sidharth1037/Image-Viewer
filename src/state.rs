@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use eframe::egui::{TextureHandle, Vec2}; 
 use crate::preload::PreloadRing;
+use crate::adjustments::AdjustmentPipeline;
 
 pub struct ViewerState {
     // NOTE: This tracks viewport maximized state (not OS exclusive fullscreen mode).
@@ -46,6 +47,12 @@ pub struct ViewerState {
 
     // --- Preloading Ring Buffer ---
     pub preload: PreloadRing,
+
+    // --- Image Adjustments (Gamma, future: Contrast, Exposure, etc.) ---
+    pub adjustments: AdjustmentPipeline,
+    pub original_pixels: Vec<Vec<u8>>,  // Original decoded pixels per frame (untouched by adjustments)
+    pub adjustments_dirty: bool,        // True when textures need rebuilding after an adjustment change
+    pub adjustments_last_changed: Option<f64>, // Timestamp of last adjustment change (for fade-out overlay)
 }
 
 impl ViewerState {
@@ -86,6 +93,10 @@ impl ViewerState {
             dir_req_tx,
             dir_res_rx,
             preload,
+            adjustments: AdjustmentPipeline::default(),
+            original_pixels: Vec::new(),
+            adjustments_dirty: false,
+            adjustments_last_changed: None,
         }
     }
 }

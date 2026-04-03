@@ -4,6 +4,7 @@
 // Declare our modules (links the .rs files)
 mod state;
 mod app;
+mod adjustments;
 mod image_io;
 mod preload;
 mod scanner;

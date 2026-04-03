@@ -93,11 +93,13 @@ impl eframe::App for ImageApp {
         handlers::handle_keyboard(self, ctx);
         handlers::process_image_loading(self, ctx);
         handlers::process_directory_scanning(self);
+        handlers::rebuild_adjusted_textures(self, ctx);
         
         // 2. Render UI Layers
         ui::topbar::render(self, ctx);
         ui::bottom_bar::render(self, ctx);
         ui::settings::render(self, ctx); 
+        ui::adjustment_overlay::render(ctx, &self.state);
         
         // Capture navigation actions from the canvas
         let mut nav_action = None;

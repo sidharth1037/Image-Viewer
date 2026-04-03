@@ -58,6 +58,10 @@ fn reset_view_for_new_file(app: &mut ImageApp) {
     app.state.target_scale = None;
     app.state.target_pan = None;
     app.state.reset_start_time = None;
+    app.state.adjustments.reset_all();
+    app.state.original_pixels.clear();
+    app.state.adjustments_dirty = false;
+    app.state.adjustments_last_changed = None;
 }
 
 fn apply_loaded_image(app: &mut ImageApp, ctx: &egui::Context, loaded_image: crate::image_io::LoadedImage) {
@@ -66,6 +70,12 @@ fn apply_loaded_image(app: &mut ImageApp, ctx: &egui::Context, loaded_image: cra
     app.state.current_frame = 0;
     app.state.last_frame_time = None;
     app.state.image_resolution = Some((loaded_image.width, loaded_image.height));
+
+    // Store original pixels for non-destructive adjustment recomputation
+    app.state.original_pixels.clear();
+    for frame in loaded_image.frames.iter() {
+        app.state.original_pixels.push(frame.pixels.clone());
+    }
 
     for (i, frame) in loaded_image.frames.iter().enumerate() {
         let color_image = egui::ColorImage::from_rgba_unmultiplied(
@@ -178,7 +188,61 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         } else if i.key_pressed(egui::Key::ArrowLeft) {
             navigate(app, -1);
         }
+        // --- Gamma Adjustment: Key 5 = decrease, Key 6 = increase ---
+        if i.key_pressed(egui::Key::Num5) {
+            let gamma = &mut app.state.adjustments.gamma;
+            gamma.value = (gamma.value - crate::adjustments::gamma::GammaAdjustment::STEP)
+                .clamp(
+                    crate::adjustments::gamma::GammaAdjustment::MIN,
+                    crate::adjustments::gamma::GammaAdjustment::MAX,
+                );
+            app.state.adjustments_dirty = true;
+            app.state.adjustments_last_changed = Some(i.time);
+        }
+        if i.key_pressed(egui::Key::Num6) {
+            let gamma = &mut app.state.adjustments.gamma;
+            gamma.value = (gamma.value + crate::adjustments::gamma::GammaAdjustment::STEP)
+                .clamp(
+                    crate::adjustments::gamma::GammaAdjustment::MIN,
+                    crate::adjustments::gamma::GammaAdjustment::MAX,
+                );
+            app.state.adjustments_dirty = true;
+            app.state.adjustments_last_changed = Some(i.time);
+        }
     });
+}
+
+/// Rebuilds GPU textures from original pixels with current adjustments applied.
+/// Only runs when the `adjustments_dirty` flag is set, to avoid per-frame work.
+pub fn rebuild_adjusted_textures(app: &mut ImageApp, _ctx: &egui::Context) {
+    if !app.state.adjustments_dirty {
+        return;
+    }
+    app.state.adjustments_dirty = false;
+
+    let (width, height) = match app.state.image_resolution {
+        Some(res) => res,
+        None => return,
+    };
+
+    // Re-apply all adjustments to the stored original pixels and re-upload textures
+    for (i, original) in app.state.original_pixels.iter().enumerate() {
+        let adjusted = if app.state.adjustments.has_adjustments() {
+            app.state.adjustments.apply_all(original)
+        } else {
+            original.clone()
+        };
+
+        let color_image = egui::ColorImage::from_rgba_unmultiplied(
+            [width as usize, height as usize],
+            &adjusted,
+        );
+
+        if let Some(tex) = app.state.frames.get_mut(i) {
+            // Update existing texture in-place (avoids GPU handle churn)
+            tex.set(color_image, egui::TextureOptions::LINEAR);
+        }
+    }
 }
 
 pub fn process_directory_scanning(app: &mut ImageApp) {
