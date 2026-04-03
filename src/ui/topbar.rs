@@ -6,11 +6,12 @@ use egui_phosphor::regular as icons;
 const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
 const SORT_POPUP_ID: &str = "sort_hover_menu";
 
-fn padded_left_row_button(ui: &mut egui::Ui, label: &str, selected: bool) -> bool {
+fn padded_left_row_button(ui: &mut egui::Ui, label: &str, tooltip: &str, selected: bool) -> bool {
     const H_PADDING: f32 = 10.0;
 
     let row_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
     let (rect, response) = ui.allocate_exact_size(row_size, egui::Sense::click());
+    let response = response.on_hover_text(tooltip);
 
     if ui.is_rect_visible(rect) {
         let visuals = &ui.style().visuals;
@@ -34,6 +35,10 @@ fn padded_left_row_button(ui: &mut egui::Ui, label: &str, selected: bool) -> boo
     }
 
     response.clicked()
+}
+
+fn tooltip_with_shortcut(label: &str, shortcut: &str) -> String {
+    format!("{} [{}]", label, shortcut)
 }
 
 fn is_bar_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
@@ -169,9 +174,13 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);
+            let win_up = format!("Win+{}", icons::ARROW_UP);
+            let win_down = format!("Win+{}", icons::ARROW_DOWN);
             
             let close_btn = egui::Button::new(icons::X);
-            let close_res = ui.add(close_btn);
+            let close_res = ui
+                .add(close_btn)
+                .on_hover_text(tooltip_with_shortcut("Close window", "Ctrl+Q"));
 
             if close_res.hovered() {
                 ui.painter().rect_filled(
@@ -193,20 +202,34 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
             
             let icon = if app.state.is_fullscreen { icons::CORNERS_IN } else { icons::CORNERS_OUT };
-            if ui.button(icon).clicked() {
+            let fullscreen_res = ui
+                .button(icon)
+                .on_hover_text(if app.state.is_fullscreen {
+                    tooltip_with_shortcut("Restore window", &win_down)
+                } else {
+                    tooltip_with_shortcut("Maximize window", &win_up)
+                });
+            if fullscreen_res.clicked() {
                 app.state.is_fullscreen = !app.state.is_fullscreen;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(app.state.is_fullscreen));
             }
 
-            if ui.button(icons::MINUS).clicked() { 
+            let minimize_res = ui
+                .button(icons::MINUS)
+                .on_hover_text(tooltip_with_shortcut("Minimize window", &win_down));
+            if minimize_res.clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)); 
             }
             
             ui.add_space(12.0); 
             
             let settings_btn = egui::Button::new(icons::GEAR_SIX).selected(app.show_settings_window);
-            if ui.add(settings_btn).clicked() {
-                app.show_settings_window = !app.show_settings_window; 
+            if ui
+                .add(settings_btn)
+                .on_hover_text(tooltip_with_shortcut("Settings", "Ctrl+,"))
+                .clicked()
+            {
+                crate::handlers::toggle_settings_window(app);
             }
 
             ui.add_space(8.0);
@@ -217,7 +240,9 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             let sort_label = sort_controls::topbar_method_label(app.state.sort_method);
 
             // 1. Draw the Toggle Button
-            let btn_res = ui.button(sort_label);
+            let btn_res = ui
+                .button(sort_label)
+                .on_hover_text(tooltip_with_shortcut("Choose sorting type", "Ctrl+Left/Right"));
             if btn_res.clicked() {
                 if app.show_sort_menu {
                     app.show_sort_menu = false;
@@ -231,7 +256,10 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // Dedicated icon-only button for switching ascending/descending.
             let order_res = ui
                 .add(egui::Button::new(sort_controls::order_icon(app.state.sort_order)))
-                .on_hover_text(sort_controls::order_tooltip(app.state.sort_order));
+                .on_hover_text(tooltip_with_shortcut(
+                    sort_controls::order_tooltip(app.state.sort_order),
+                    "Ctrl+Up/Down",
+                ));
             if order_res.clicked() {
                 crate::handlers::set_sort_order(app, app.state.sort_order.toggled());
             }
@@ -242,14 +270,14 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
             let jump_last_res = ui
                 .add_enabled(can_jump_last, egui::Button::new(icons::ARROW_LINE_RIGHT))
-                .on_hover_text("Jump to last item");
+                .on_hover_text(tooltip_with_shortcut("Jump to last item", "Ctrl+Shift+J"));
             if jump_last_res.clicked() {
                 crate::handlers::jump_to_playlist_edge(app, true);
             }
 
             let jump_first_res = ui
                 .add_enabled(can_jump_first, egui::Button::new(icons::ARROW_LINE_LEFT))
-                .on_hover_text("Jump to first item");
+                .on_hover_text(tooltip_with_shortcut("Jump to first item", "Ctrl+J"));
             if jump_first_res.clicked() {
                 crate::handlers::jump_to_playlist_edge(app, false);
             }
@@ -276,7 +304,12 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             for option in sort_controls::SORT_OPTIONS {
                                 let is_selected = app.state.sort_method == option.method;
                                 let label = sort_controls::popup_item_label(option.method);
-                                let changed = padded_left_row_button(ui, &label, is_selected);
+                                let changed = padded_left_row_button(
+                                    ui,
+                                    &label,
+                                    &tooltip_with_shortcut("Set sorting type", "No shortcut"),
+                                    is_selected,
+                                );
                                 if changed {
                                     app.state.sort_method = option.method;
                                     app.state.sort_order = crate::scanner::default_order_for(option.method);

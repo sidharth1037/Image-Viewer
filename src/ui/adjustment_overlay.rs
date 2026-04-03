@@ -5,9 +5,9 @@ use eframe::egui;
 use crate::state::ViewerState;
 
 /// How long the overlay stays fully visible before fading (seconds).
-const HOLD_DURATION: f64 = 0.5;
+const HOLD_DURATION: f64 = 1.0;
 /// How long the fade-out transition takes (seconds).
-const FADE_DURATION: f64 = 1.5;
+const FADE_DURATION: f64 = 0.35;
 /// Total visible time = HOLD + FADE.
 const TOTAL_DURATION: f64 = HOLD_DURATION + FADE_DURATION;
 

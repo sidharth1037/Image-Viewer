@@ -41,6 +41,45 @@ pub fn set_sort_order(app: &mut ImageApp, order: crate::scanner::SortOrder) {
     rescan_current_sort(app);
 }
 
+fn sort_method_name(method: crate::scanner::SortMethod) -> &'static str {
+    match method {
+        crate::scanner::SortMethod::Alphabetical => "Alphabetical",
+        crate::scanner::SortMethod::Natural => "Natural",
+        crate::scanner::SortMethod::Size => "Size",
+        crate::scanner::SortMethod::DateModified => "Date modified",
+        crate::scanner::SortMethod::DateCreated => "Date created",
+    }
+}
+
+pub fn cycle_sort_method(app: &mut ImageApp, direction: i32) {
+    use crate::scanner::SortMethod;
+
+    let ordered = [
+        SortMethod::Alphabetical,
+        SortMethod::Natural,
+        SortMethod::Size,
+        SortMethod::DateModified,
+        SortMethod::DateCreated,
+    ];
+
+    let current = ordered
+        .iter()
+        .position(|m| *m == app.state.sort_method)
+        .unwrap_or(0);
+
+    let next = if direction >= 0 {
+        (current + 1) % ordered.len()
+    } else if current == 0 {
+        ordered.len() - 1
+    } else {
+        current - 1
+    };
+
+    app.state.sort_method = ordered[next];
+    app.state.sort_order = crate::scanner::default_order_for(app.state.sort_method);
+    rescan_current_sort(app);
+}
+
 pub fn jump_to_playlist_edge(app: &mut ImageApp, to_last: bool) {
     if app.state.playlist.is_empty() {
         return;
@@ -248,9 +287,12 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.navigate_prev.is_pressed(i),
             shortcuts.jump_to_start.is_pressed(i),
             shortcuts.jump_to_end.is_pressed(i),
+            shortcuts.cycle_sort_method_prev.is_pressed(i),
+            shortcuts.cycle_sort_method_next.is_pressed(i),
             shortcuts.sort_ascending.is_pressed(i),
             shortcuts.sort_descending.is_pressed(i),
             shortcuts.toggle_settings.is_pressed(i),
+            shortcuts.close_window.is_pressed(i),
             shortcuts.saturation_decrease.pressed_step_multiplier(i),
             shortcuts.saturation_increase.pressed_step_multiplier(i),
             shortcuts.contrast_decrease.pressed_step_multiplier(i),
@@ -274,9 +316,12 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         go_prev,
         jump_start,
         jump_end,
+        cycle_sort_prev,
+        cycle_sort_next,
         sort_ascending,
         sort_descending,
         toggle_settings,
+        close_window,
         saturation_down,
         saturation_up,
         contrast_down,
@@ -310,6 +355,17 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         set_overlay_message(app, time, "Shortcut: Jump to end");
     }
 
+    if cycle_sort_prev {
+        cycle_sort_method(app, -1);
+        let text = format!("Shortcut: Sort type -> {}", sort_method_name(app.state.sort_method));
+        set_overlay_message(app, time, &text);
+    }
+    if cycle_sort_next {
+        cycle_sort_method(app, 1);
+        let text = format!("Shortcut: Sort type -> {}", sort_method_name(app.state.sort_method));
+        set_overlay_message(app, time, &text);
+    }
+
     if sort_ascending {
         set_sort_order(app, crate::scanner::SortOrder::Ascending);
         set_overlay_message(app, time, "Shortcut: Sort ascending");
@@ -322,6 +378,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     if toggle_settings {
         toggle_settings_window(app);
         set_overlay_message(app, time, "Shortcut: Toggle settings");
+    }
+
+    if close_window {
+        set_overlay_message(app, time, "Shortcut: Close window");
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
     if let Some(multiplier) = saturation_down {
