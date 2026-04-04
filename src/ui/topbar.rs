@@ -5,6 +5,114 @@ use egui_phosphor::regular as icons;
 
 const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
 const SORT_POPUP_ID: &str = "sort_hover_menu";
+const TOPBAR_FIXED_RESERVED_WIDTH: f32 = 172.0;
+const TOPBAR_MIN_TITLE_WIDTH_BEFORE_HIDING: f32 = 150.0;
+
+#[derive(Clone, Copy)]
+enum TopbarResponsiveControl {
+    Settings,
+    SortMethod,
+    SortOrder,
+    JumpGroup,
+}
+
+#[derive(Clone, Copy)]
+struct TopbarResponsiveSpec {
+    control: TopbarResponsiveControl,
+    estimated_width: f32,
+    hide_priority: u8,
+}
+
+#[derive(Clone, Copy, Default)]
+struct TopbarControlVisibility {
+    show_settings: bool,
+    show_sort_method: bool,
+    show_sort_order: bool,
+    show_jump_group: bool,
+}
+
+#[derive(Clone, Copy)]
+struct TopbarLayoutDecision {
+    controls: TopbarControlVisibility,
+    reserved_for_buttons: f32,
+}
+
+fn topbar_responsive_specs() -> [TopbarResponsiveSpec; 4] {
+    // Keep this centralized so new controls can be added without changing render logic.
+    [
+        TopbarResponsiveSpec {
+            control: TopbarResponsiveControl::Settings,
+            estimated_width: 36.0,
+            hide_priority: 1,
+        },
+        TopbarResponsiveSpec {
+            control: TopbarResponsiveControl::SortMethod,
+            estimated_width: 130.0,
+            hide_priority: 2,
+        },
+        TopbarResponsiveSpec {
+            control: TopbarResponsiveControl::SortOrder,
+            estimated_width: 36.0,
+            hide_priority: 3,
+        },
+        TopbarResponsiveSpec {
+            control: TopbarResponsiveControl::JumpGroup,
+            estimated_width: 74.0,
+            hide_priority: 4,
+        },
+    ]
+}
+
+fn set_control_visibility(visibility: &mut TopbarControlVisibility, control: TopbarResponsiveControl, value: bool) {
+    match control {
+        TopbarResponsiveControl::Settings => visibility.show_settings = value,
+        TopbarResponsiveControl::SortMethod => visibility.show_sort_method = value,
+        TopbarResponsiveControl::SortOrder => visibility.show_sort_order = value,
+        TopbarResponsiveControl::JumpGroup => visibility.show_jump_group = value,
+    }
+}
+
+fn resolve_topbar_layout(available_width: f32) -> TopbarLayoutDecision {
+    let specs = topbar_responsive_specs();
+
+    let mut visible = [true; 4];
+    let mut responsive_used: f32 = specs.iter().map(|spec| spec.estimated_width).sum();
+    // Let the title shrink first. Only hide controls when this minimum title width would be violated.
+    let responsive_budget = (available_width
+        - TOPBAR_FIXED_RESERVED_WIDTH
+        - TOPBAR_MIN_TITLE_WIDTH_BEFORE_HIDING)
+        .max(0.0);
+
+    while responsive_used > responsive_budget {
+        let to_hide = specs
+            .iter()
+            .enumerate()
+            .filter(|(idx, _)| visible[*idx])
+            .max_by_key(|(_, spec)| spec.hide_priority)
+            .map(|(idx, _)| idx);
+
+        let Some(idx) = to_hide else {
+            break;
+        };
+
+        visible[idx] = false;
+        responsive_used -= specs[idx].estimated_width;
+    }
+
+    let mut controls = TopbarControlVisibility::default();
+    for (idx, spec) in specs.iter().enumerate() {
+        set_control_visibility(&mut controls, spec.control, visible[idx]);
+    }
+
+    TopbarLayoutDecision {
+        controls,
+        reserved_for_buttons: TOPBAR_FIXED_RESERVED_WIDTH + responsive_used,
+    }
+}
+
+fn response_contains(response: Option<&egui::Response>, pos: egui::Pos2) -> bool {
+    response.is_some_and(|res| res.rect.contains(pos))
+}
 
 fn padded_left_row_button(ui: &mut egui::Ui, label: &str, tooltip: &str, selected: bool) -> bool {
     const H_PADDING: f32 = 10.0;
@@ -135,10 +243,9 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
     ui.horizontal_centered(|ui| {
         ui.add_space(8.0);
-        
-        // Keep enough room for window controls + settings + sort controls.
-        let reserved_for_buttons: f32 = 420.0;
-        let avail_px = (ui.available_width() - reserved_for_buttons).max(0.0);
+
+        let layout = resolve_topbar_layout(ui.available_width());
+        let avail_px = (ui.available_width() - layout.reserved_for_buttons).max(0.0);
 
         if (app.last_title_width - avail_px).abs() > 5.0 || app.cached_title.is_empty() {
             let full_title = if app.state.current_file_name.is_empty() { 
@@ -176,6 +283,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             ui.add_space(8.0);
             let win_up = format!("Win+{}", icons::ARROW_UP);
             let win_down = format!("Win+{}", icons::ARROW_DOWN);
+            let controls = layout.controls;
             
             let close_btn = egui::Button::new(icons::X);
             let close_res = ui
@@ -220,73 +328,101 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             if minimize_res.clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)); 
             }
-            
-            ui.add_space(12.0); 
-            
-            let settings_btn = egui::Button::new(icons::GEAR_SIX).selected(app.show_settings_window);
-            if ui
-                .add(settings_btn)
-                .on_hover_text(tooltip_with_shortcut("Settings", "Ctrl+,"))
-                .clicked()
-            {
-                crate::handlers::toggle_settings_window(app);
+
+            if controls.show_settings || controls.show_sort_method || controls.show_sort_order || controls.show_jump_group {
+                ui.add_space(12.0);
             }
 
-            ui.add_space(8.0);
+            if controls.show_settings {
+                let settings_btn = egui::Button::new(icons::GEAR_SIX).selected(app.show_settings_window);
+                if ui
+                    .add(settings_btn)
+                    .on_hover_text(tooltip_with_shortcut("Settings", "Ctrl+,"))
+                    .clicked()
+                {
+                    crate::handlers::toggle_settings_window(app);
+                }
+            }
+
+            let show_sort_section = controls.show_sort_method || controls.show_sort_order || controls.show_jump_group;
+            if controls.show_settings && show_sort_section {
+                ui.add_space(8.0);
+            }
 
             // --- Sorting Dropdown ---
             let mut sort_changed = false;
             let popup_id = egui::Id::new(SORT_POPUP_ID);
             let sort_label = sort_controls::topbar_method_label(app.state.sort_method);
+            let mut btn_res: Option<egui::Response> = None;
+            let mut order_res: Option<egui::Response> = None;
+            let mut jump_last_res: Option<egui::Response> = None;
+            let mut jump_first_res: Option<egui::Response> = None;
 
             // 1. Draw the Toggle Button
-            let btn_res = ui
-                .button(sort_label)
-                .on_hover_text(tooltip_with_shortcut("Choose sorting type", "Ctrl+Left/Right"));
-            if btn_res.clicked() {
-                if app.show_sort_menu {
-                    app.show_sort_menu = false;
-                    app.sort_menu_pos = None;
-                } else {
-                    app.show_sort_menu = true;
-                    app.sort_menu_pos = Some(egui::pos2(btn_res.rect.left(), btn_res.rect.bottom() + 10.0));
+            if controls.show_sort_method {
+                let res = ui
+                    .button(sort_label)
+                    .on_hover_text(tooltip_with_shortcut("Choose sorting type", "Ctrl+Left/Right"));
+                if res.clicked() {
+                    if app.show_sort_menu {
+                        app.show_sort_menu = false;
+                        app.sort_menu_pos = None;
+                    } else {
+                        app.show_sort_menu = true;
+                        app.sort_menu_pos = Some(egui::pos2(res.rect.left(), res.rect.bottom() + 10.0));
+                    }
                 }
+                btn_res = Some(res);
+            } else if app.show_sort_menu {
+                app.show_sort_menu = false;
+                app.sort_menu_pos = None;
             }
 
             // Dedicated icon-only button for switching ascending/descending.
-            let order_res = ui
-                .add(egui::Button::new(sort_controls::order_icon(app.state.sort_order)))
-                .on_hover_text(tooltip_with_shortcut(
-                    sort_controls::order_tooltip(app.state.sort_order),
-                    "Ctrl+Up/Down",
-                ));
-            if order_res.clicked() {
-                crate::handlers::set_sort_order(app, app.state.sort_order.toggled());
+            if controls.show_sort_order {
+                let res = ui
+                    .add(egui::Button::new(sort_controls::order_icon(app.state.sort_order)))
+                    .on_hover_text(tooltip_with_shortcut(
+                        sort_controls::order_tooltip(app.state.sort_order),
+                        "Ctrl+Up/Down",
+                    ));
+                if res.clicked() {
+                    crate::handlers::set_sort_order(app, app.state.sort_order.toggled());
+                }
+                order_res = Some(res);
             }
 
             let has_playlist = !app.state.playlist.is_empty();
             let can_jump_last = has_playlist && app.state.current_index + 1 < app.state.playlist.len();
             let can_jump_first = has_playlist && app.state.current_index > 0;
 
-            let jump_last_res = ui
-                .add_enabled(can_jump_last, egui::Button::new(icons::ARROW_LINE_RIGHT))
-                .on_hover_text(tooltip_with_shortcut("Jump to last item", "Ctrl+Shift+J"));
-            if jump_last_res.clicked() {
-                crate::handlers::jump_to_playlist_edge(app, true);
-            }
+            if controls.show_jump_group {
+                let right_res = ui
+                    .add_enabled(can_jump_last, egui::Button::new(icons::ARROW_LINE_RIGHT))
+                    .on_hover_text(tooltip_with_shortcut("Jump to last item", "Ctrl+Shift+J"));
+                if right_res.clicked() {
+                    crate::handlers::jump_to_playlist_edge(app, true);
+                }
+                jump_last_res = Some(right_res);
 
-            let jump_first_res = ui
-                .add_enabled(can_jump_first, egui::Button::new(icons::ARROW_LINE_LEFT))
-                .on_hover_text(tooltip_with_shortcut("Jump to first item", "Ctrl+J"));
-            if jump_first_res.clicked() {
-                crate::handlers::jump_to_playlist_edge(app, false);
+                let left_res = ui
+                    .add_enabled(can_jump_first, egui::Button::new(icons::ARROW_LINE_LEFT))
+                    .on_hover_text(tooltip_with_shortcut("Jump to first item", "Ctrl+J"));
+                if left_res.clicked() {
+                    crate::handlers::jump_to_playlist_edge(app, false);
+                }
+                jump_first_res = Some(left_res);
             }
 
             // 2. Draw the Hovering Menu Area if open
-            if app.show_sort_menu {
+            if app.show_sort_menu && controls.show_sort_method {
+                let sort_btn_rect = btn_res
+                    .as_ref()
+                    .map(|res| res.rect)
+                    .unwrap_or_else(|| egui::Rect::from_min_size(egui::Pos2::ZERO, egui::Vec2::ZERO));
                 let popup_pos = app
                     .sort_menu_pos
-                    .unwrap_or_else(|| egui::pos2(btn_res.rect.left(), btn_res.rect.bottom() + 10.0));
+                    .unwrap_or_else(|| egui::pos2(sort_btn_rect.left(), sort_btn_rect.bottom() + 10.0));
 
                 let mut selected_sort_option = false;
 
@@ -330,10 +466,10 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 if app.show_sort_menu && ctx.input(|i| i.pointer.any_pressed()) {
                     let clicked_outside = ctx.pointer_interact_pos().map_or(false, |pos| {
                         !area_res.response.rect.contains(pos)
-                            && !btn_res.rect.contains(pos)
-                            && !order_res.rect.contains(pos)
-                            && !jump_last_res.rect.contains(pos)
-                            && !jump_first_res.rect.contains(pos)
+                            && !response_contains(btn_res.as_ref(), pos)
+                            && !response_contains(order_res.as_ref(), pos)
+                            && !response_contains(jump_last_res.as_ref(), pos)
+                            && !response_contains(jump_first_res.as_ref(), pos)
                     });
                     
                     if clicked_outside || sort_changed {

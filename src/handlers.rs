@@ -340,10 +340,10 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
 
     if go_next {
         navigate(app, 1);
-        set_overlay_message(app, time, "Shortcut: Next image");
+        // set_overlay_message(app, time, "Shortcut: Next image");
     } else if go_prev {
         navigate(app, -1);
-        set_overlay_message(app, time, "Shortcut: Previous image");
+        // set_overlay_message(app, time, "Shortcut: Previous image");
     }
 
     if jump_start {
