@@ -59,7 +59,7 @@ fn topbar_responsive_specs() -> [TopbarResponsiveSpec; 5] {
         },
         TopbarResponsiveSpec {
             control: TopbarResponsiveControl::Search,
-            estimated_width: 36.0,
+            estimated_width: 200.0,
             hide_priority: 4,
         },
         TopbarResponsiveSpec {
@@ -423,18 +423,39 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
 
             if controls.show_search {
-                let mut search_btn = egui::Button::new(icons::MAGNIFYING_GLASS);
-                if app.show_filter_popup || !app.state.filter.criteria.text.trim().is_empty() {
-                    search_btn = search_btn.selected(true);
-                }
+                let filter_text_owned = app.state.filter.criteria.text.clone();
+                let filter_text = filter_text_owned.trim();
+                let search_label = if filter_text.is_empty() {
+                    format!("{} Filter", icons::MAGNIFYING_GLASS)
+                } else {
+                    format!("{} {}", icons::MAGNIFYING_GLASS, filter_text)
+                };
 
-                if ui
-                    .add(search_btn)
-                    .on_hover_text(tooltip_with_shortcut("Filter playlist", "Ctrl+F"))
-                    .clicked()
-                {
-                    crate::handlers::toggle_filter_popup(app);
-                }
+                ui.scope(|ui| {
+                    let spacing = &mut ui.spacing_mut().item_spacing;
+                    let prev_x = spacing.x;
+                    spacing.x = 0.0;
+
+                    if !filter_text.is_empty() {
+                        if ui
+                            .button(icons::X)
+                            .on_hover_text("Clear filter")
+                            .clicked()
+                        {
+                            crate::handlers::set_text_filter(app, String::new());
+                        }
+                    }
+
+                    if ui
+                        .add(egui::Button::new(search_label))
+                        .on_hover_text(tooltip_with_shortcut("Filter playlist", "Ctrl+F"))
+                        .clicked()
+                    {
+                        crate::handlers::toggle_filter_popup(app);
+                    }
+
+                    ui.spacing_mut().item_spacing.x = prev_x;
+                });
             }
 
             // 2. Draw the Hovering Menu Area if open

@@ -24,15 +24,16 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             egui::Frame::menu(ui.style()).show(ui, |ui| {
                 ui.set_width(FILTER_POPUP_WIDTH);
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("Filter Playlist").strong());
+                    ui.label(egui::RichText::new("Filter").strong());
                     ui.add_space(6.0);
 
                     let mut filter_text = app.state.filter.criteria.text.clone();
                     let text_id = egui::Id::new(FILTER_TEXT_ID);
-                    let text_res = ui.add(
+                    let text_res = ui.add_sized(
+                        [ui.available_width(), ui.spacing().interact_size.y],
                         egui::TextEdit::singleline(&mut filter_text)
                             .id_source(text_id)
-                            .desired_width(FILTER_POPUP_WIDTH - 24.0)
+                            .desired_width(ui.available_width())
                             .hint_text("Type to filter files..."),
                     );
 
