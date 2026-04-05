@@ -59,7 +59,7 @@ pub fn render(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut ViewerState, l
     }
 
     // Determine navigation availability based on playlist position
-    let playlist_len = state.playlist.len();
+    let playlist_len = state.active_playlist.len();
     let current_idx = state.current_index;
     let has_prev = playlist_len > 1 && (loop_playlist || current_idx > 0);
     let has_next = playlist_len > 1 && (loop_playlist || current_idx + 1 < playlist_len);

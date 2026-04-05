@@ -68,10 +68,10 @@ fn render_content(app: &ImageApp, ui: &mut egui::Ui) {
 
     let scale_text = format!("{:.0}%", app.state.scale * 100.0);
 
-    let (index, total) = if app.state.playlist.is_empty() {
+    let (index, total) = if app.state.active_playlist.is_empty() {
         (1, 1)
     } else {
-        (app.state.current_index + 1, app.state.playlist.len())
+        (app.state.current_index + 1, app.state.active_playlist.len())
     };
     let playlist_text = format!("{} of {}", index, total);
 
@@ -93,7 +93,7 @@ pub fn render(app: &ImageApp, ctx: &egui::Context) {
     let is_immersive = app.state.is_fullscreen && app.settings.immersive_maximized;
 
     if is_immersive {
-        let show_bars = app.show_sort_menu || is_bottom_visible_in_immersive(app, ctx);
+        let show_bars = app.show_sort_menu || app.show_filter_popup || is_bottom_visible_in_immersive(app, ctx);
         if show_bars {
             egui::Area::new(egui::Id::new("bottom_bar_overlay"))
                 .fixed_pos(egui::pos2(0.0, ctx.content_rect().max.y - BOTTOM_BAR_HEIGHT))

@@ -8,6 +8,7 @@ mod adjustments;
 mod image_io;
 mod preload;
 mod scanner;
+mod playlist_view;
 mod shortcuts;
 mod ui;
 mod handlers;

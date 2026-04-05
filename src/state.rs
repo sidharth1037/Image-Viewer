@@ -6,6 +6,16 @@ use eframe::egui::{TextureHandle, Vec2};
 use crate::preload::PreloadRing;
 use crate::adjustments::AdjustmentPipeline;
 
+#[derive(Clone, Default)]
+pub struct FilterCriteria {
+    pub text: String,
+}
+
+#[derive(Clone, Default)]
+pub struct FilterState {
+    pub criteria: FilterCriteria,
+}
+
 pub struct ViewerState {
     // NOTE: This tracks viewport maximized state (not OS exclusive fullscreen mode).
     pub is_fullscreen: bool,
@@ -38,8 +48,10 @@ pub struct ViewerState {
 
     // --- Playlist State ---
     pub current_folder: Option<PathBuf>,
-    pub playlist: Vec<PathBuf>,
+    pub source_playlist: Vec<PathBuf>,
+    pub active_playlist: Vec<PathBuf>,
     pub current_index: usize,
+    pub filter: FilterState,
     pub sort_method: crate::scanner::SortMethod, 
     pub sort_order: crate::scanner::SortOrder,
     pub scan_id: Arc<AtomicU64>, // Cancellation token for folder scans
@@ -89,8 +101,10 @@ impl ViewerState {
             req_tx,
             res_rx,
             current_folder: None,
-            playlist: Vec::new(),
+            source_playlist: Vec::new(),
+            active_playlist: Vec::new(),
             current_index: 0,
+            filter: FilterState::default(),
             sort_method: crate::scanner::SortMethod::Natural,
             sort_order: crate::scanner::default_order_for(crate::scanner::SortMethod::Natural),
             scan_id,

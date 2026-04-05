@@ -13,6 +13,7 @@ enum TopbarResponsiveControl {
     Settings,
     SortMethod,
     SortOrder,
+    Search,
     JumpGroup,
 }
 
@@ -28,6 +29,7 @@ struct TopbarControlVisibility {
     show_settings: bool,
     show_sort_method: bool,
     show_sort_order: bool,
+    show_search: bool,
     show_jump_group: bool,
 }
 
@@ -37,7 +39,7 @@ struct TopbarLayoutDecision {
     reserved_for_buttons: f32,
 }
 
-fn topbar_responsive_specs() -> [TopbarResponsiveSpec; 4] {
+fn topbar_responsive_specs() -> [TopbarResponsiveSpec; 5] {
     // Keep this centralized so new controls can be added without changing render logic.
     [
         TopbarResponsiveSpec {
@@ -56,9 +58,14 @@ fn topbar_responsive_specs() -> [TopbarResponsiveSpec; 4] {
             hide_priority: 3,
         },
         TopbarResponsiveSpec {
+            control: TopbarResponsiveControl::Search,
+            estimated_width: 36.0,
+            hide_priority: 4,
+        },
+        TopbarResponsiveSpec {
             control: TopbarResponsiveControl::JumpGroup,
             estimated_width: 74.0,
-            hide_priority: 4,
+            hide_priority: 5,
         },
     ]
 }
@@ -68,6 +75,7 @@ fn set_control_visibility(visibility: &mut TopbarControlVisibility, control: Top
         TopbarResponsiveControl::Settings => visibility.show_settings = value,
         TopbarResponsiveControl::SortMethod => visibility.show_sort_method = value,
         TopbarResponsiveControl::SortOrder => visibility.show_sort_order = value,
+        TopbarResponsiveControl::Search => visibility.show_search = value,
         TopbarResponsiveControl::JumpGroup => visibility.show_jump_group = value,
     }
 }
@@ -75,7 +83,7 @@ fn set_control_visibility(visibility: &mut TopbarControlVisibility, control: Top
 fn resolve_topbar_layout(available_width: f32) -> TopbarLayoutDecision {
     let specs = topbar_responsive_specs();
 
-    let mut visible = [true; 4];
+    let mut visible = [true; 5];
     let mut responsive_used: f32 = specs.iter().map(|spec| spec.estimated_width).sum();
     // Let the title shrink first. Only hide controls when this minimum title width would be violated.
     let responsive_budget = (available_width
@@ -183,7 +191,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
 
         // --- THE FIX: KEEP OPEN IF DROPDOWN IS ACTIVE ---
         // We force the top bar to stay visible if our custom hover menu is open.
-        if app.show_sort_menu {
+        if app.show_sort_menu || app.show_filter_popup {
             show_bars = true;
         }
 
@@ -344,7 +352,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 }
             }
 
-            let show_sort_section = controls.show_sort_method || controls.show_sort_order || controls.show_jump_group;
+            let show_sort_section = controls.show_sort_method || controls.show_sort_order || controls.show_search || controls.show_jump_group;
             if controls.show_settings && show_sort_section {
                 ui.add_space(8.0);
             }
@@ -392,8 +400,8 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 order_res = Some(res);
             }
 
-            let has_playlist = !app.state.playlist.is_empty();
-            let can_jump_last = has_playlist && app.state.current_index + 1 < app.state.playlist.len();
+            let has_playlist = !app.state.active_playlist.is_empty();
+            let can_jump_last = has_playlist && app.state.current_index + 1 < app.state.active_playlist.len();
             let can_jump_first = has_playlist && app.state.current_index > 0;
 
             if controls.show_jump_group {
@@ -412,6 +420,21 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     crate::handlers::jump_to_playlist_edge(app, false);
                 }
                 jump_first_res = Some(left_res);
+            }
+
+            if controls.show_search {
+                let mut search_btn = egui::Button::new(icons::MAGNIFYING_GLASS);
+                if app.show_filter_popup || !app.state.filter.criteria.text.trim().is_empty() {
+                    search_btn = search_btn.selected(true);
+                }
+
+                if ui
+                    .add(search_btn)
+                    .on_hover_text(tooltip_with_shortcut("Filter playlist", "Ctrl+F"))
+                    .clicked()
+                {
+                    crate::handlers::toggle_filter_popup(app);
+                }
             }
 
             // 2. Draw the Hovering Menu Area if open

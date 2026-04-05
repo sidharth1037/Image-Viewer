@@ -36,6 +36,9 @@ pub struct ImageApp {
     pub show_settings_window: bool,
     pub show_sort_menu: bool,
     pub sort_menu_pos: Option<egui::Pos2>,
+    pub show_filter_popup: bool,
+    pub filter_popup_focus_pending: bool,
+    pub filter_popup_just_opened: bool,
 }
 
 impl ImageApp {
@@ -78,6 +81,9 @@ impl ImageApp {
             show_settings_window: false,
             show_sort_menu: false,
             sort_menu_pos: None,
+            show_filter_popup: false,
+            filter_popup_focus_pending: false,
+            filter_popup_just_opened: false,
         };
 
         if let Some(path_str) = initial_file {
@@ -101,6 +107,7 @@ impl eframe::App for ImageApp {
         
         // 2. Render UI Layers
         ui::topbar::render(self, ctx);
+        ui::filter_popup::render(self, ctx);
         ui::bottom_bar::render(self, ctx);
         ui::settings::render(self, ctx); 
         ui::adjustment_overlay::render(ctx, &self.state);

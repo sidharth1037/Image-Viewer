@@ -17,8 +17,8 @@ pub fn request_directory_scan(app: &mut ImageApp, target_path: std::path::PathBu
 }
 
 fn current_sort_target_path(app: &ImageApp) -> Option<std::path::PathBuf> {
-    if !app.state.playlist.is_empty() {
-        return Some(app.state.playlist[app.state.current_index].clone());
+    if !app.state.active_playlist.is_empty() {
+        return Some(app.state.active_playlist[app.state.current_index].clone());
     }
 
     if let Some(folder) = &app.state.current_folder {
@@ -39,6 +39,35 @@ pub fn rescan_current_sort(app: &mut ImageApp) {
 pub fn set_sort_order(app: &mut ImageApp, order: crate::scanner::SortOrder) {
     app.state.sort_order = order;
     rescan_current_sort(app);
+}
+
+pub fn open_filter_popup(app: &mut ImageApp) {
+    app.show_filter_popup = true;
+    app.filter_popup_focus_pending = true;
+    app.filter_popup_just_opened = true;
+}
+
+pub fn close_filter_popup(app: &mut ImageApp) {
+    app.show_filter_popup = false;
+    app.filter_popup_focus_pending = false;
+    app.filter_popup_just_opened = false;
+}
+
+pub fn toggle_filter_popup(app: &mut ImageApp) {
+    if app.show_filter_popup {
+        close_filter_popup(app);
+    } else {
+        open_filter_popup(app);
+    }
+}
+
+pub fn set_text_filter(app: &mut ImageApp, text: String) {
+    if app.state.filter.criteria.text == text {
+        return;
+    }
+
+    app.state.filter.criteria.text = text;
+    rebuild_active_playlist_and_reconcile_current(app);
 }
 
 fn sort_method_name(method: crate::scanner::SortMethod) -> &'static str {
@@ -81,12 +110,12 @@ pub fn cycle_sort_method(app: &mut ImageApp, direction: i32) {
 }
 
 pub fn jump_to_playlist_edge(app: &mut ImageApp, to_last: bool) {
-    if app.state.playlist.is_empty() {
+    if app.state.active_playlist.is_empty() {
         return;
     }
 
     let target_index = if to_last {
-        app.state.playlist.len() - 1
+        app.state.active_playlist.len() - 1
     } else {
         0
     };
@@ -98,7 +127,7 @@ pub fn jump_to_playlist_edge(app: &mut ImageApp, to_last: bool) {
     let direction = if to_last { 1 } else { -1 };
     app.state.preload.on_navigation_away(direction);
     app.state.current_index = target_index;
-    let target_path = app.state.playlist[target_index].clone();
+    let target_path = app.state.active_playlist[target_index].clone();
     load_target_file(app, target_path);
 }
 
@@ -157,6 +186,63 @@ fn reset_view_for_new_file(app: &mut ImageApp) {
     app.state.show_original_while_held = false;
 }
 
+fn clear_current_view_for_empty_playlist(app: &mut ImageApp) {
+    app.state.current_file_path = None;
+    app.state.current_file_name.clear();
+    app.state.current_file_size_bytes = None;
+    app.state.frames.clear();
+    app.state.frame_durations.clear();
+    app.state.current_frame = 0;
+    app.state.last_frame_time = None;
+    app.state.image_resolution = None;
+    app.state.load_error = None;
+    app.state.original_pixels.clear();
+    app.state.adjustments_dirty = false;
+}
+
+fn rebuild_active_playlist_and_reconcile_current(app: &mut ImageApp) {
+    let previous_path = app.state.current_file_path.clone();
+    app.state.active_playlist = crate::playlist_view::build_active_playlist(
+        &app.state.source_playlist,
+        &app.state.filter.criteria,
+    );
+
+    if app.state.active_playlist.is_empty() {
+        app.state.current_index = 0;
+        clear_current_view_for_empty_playlist(app);
+
+        let playlist_snapshot = app.state.active_playlist.clone();
+        app.state.preload.on_playlist_updated(
+            &playlist_snapshot,
+            app.state.current_index,
+            app.settings.loop_playlist,
+            None,
+        );
+        return;
+    }
+
+    let target_index = previous_path
+        .as_ref()
+        .and_then(|path| app.state.active_playlist.iter().position(|p| p == path))
+        .unwrap_or(0);
+    let target_path = app.state.active_playlist[target_index].clone();
+    let changed_target = previous_path.as_ref() != Some(&target_path);
+
+    app.state.current_index = target_index;
+    if changed_target {
+        load_target_file(app, target_path);
+    }
+
+    let playlist_snapshot = app.state.active_playlist.clone();
+    let current_path = app.state.current_file_path.clone();
+    app.state.preload.on_playlist_updated(
+        &playlist_snapshot,
+        app.state.current_index,
+        app.settings.loop_playlist,
+        current_path.as_ref(),
+    );
+}
+
 fn apply_loaded_image(app: &mut ImageApp, ctx: &egui::Context, loaded_image: crate::image_io::LoadedImage) {
     app.state.frames.clear();
     app.state.frame_durations.clear();
@@ -186,7 +272,7 @@ fn apply_loaded_image(app: &mut ImageApp, ctx: &egui::Context, loaded_image: cra
 
     if let Some(path) = app.state.current_file_path.clone() {
         let index = app.state.current_index;
-        let playlist_snapshot = app.state.playlist.clone();
+        let playlist_snapshot = app.state.active_playlist.clone();
         app.state
             .preload
             .on_current_image_ready(path, index, loaded_image, &playlist_snapshot, app.settings.loop_playlist);
@@ -246,10 +332,10 @@ pub fn process_image_loading(app: &mut ImageApp, ctx: &egui::Context) {
 
 /// Core logic for moving through the folder's images.
 pub fn navigate(app: &mut ImageApp, direction: i32) {
-    if app.state.playlist.is_empty() { return; }
+    if app.state.active_playlist.is_empty() { return; }
 
     let current_idx = app.state.current_index;
-    let playlist_len = app.state.playlist.len();
+    let playlist_len = app.state.active_playlist.len();
     let mut navigate_to = None;
 
     if direction > 0 { // Move Forward
@@ -273,7 +359,7 @@ pub fn navigate(app: &mut ImageApp, direction: i32) {
     if let Some(new_index) = navigate_to {
         app.state.preload.on_navigation_away(direction);
         app.state.current_index = new_index;
-        let next_path = app.state.playlist[new_index].clone();
+        let next_path = app.state.active_playlist[new_index].clone();
         load_target_file(app, next_path);
     }
 }
@@ -292,6 +378,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.sort_ascending.is_pressed(i),
             shortcuts.sort_descending.is_pressed(i),
             shortcuts.toggle_settings.is_pressed(i),
+            shortcuts.toggle_search.is_pressed(i),
             shortcuts.close_window.is_pressed(i),
             shortcuts.saturation_decrease.pressed_step_multiplier(i),
             shortcuts.saturation_increase.pressed_step_multiplier(i),
@@ -321,6 +408,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         sort_ascending,
         sort_descending,
         toggle_settings,
+        toggle_search,
         close_window,
         saturation_down,
         saturation_up,
@@ -337,6 +425,14 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         reset_all,
         show_original_hold,
     ) = input;
+
+    if app.show_filter_popup {
+        if toggle_search {
+            toggle_filter_popup(app);
+            set_overlay_message(app, time, "Shortcut: Toggle filter popup");
+        }
+        return;
+    }
 
     if go_next {
         navigate(app, 1);
@@ -378,6 +474,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     if toggle_settings {
         toggle_settings_window(app);
         set_overlay_message(app, time, "Shortcut: Toggle settings");
+    }
+
+    if toggle_search {
+        toggle_filter_popup(app);
+        set_overlay_message(app, time, "Shortcut: Toggle filter popup");
     }
 
     if close_window {
@@ -608,17 +709,8 @@ pub fn process_directory_scanning(app: &mut ImageApp) {
             return;
         }
         app.state.current_folder = Some(scan.folder_path);
-        app.state.playlist = scan.playlist;
-        app.state.current_index = scan.current_index;
-
-        let playlist_snapshot = app.state.playlist.clone();
-        let current_path = app.state.current_file_path.clone();
-        app.state.preload.on_playlist_updated(
-            &playlist_snapshot,
-            app.state.current_index,
-            app.settings.loop_playlist,
-            current_path.as_ref(),
-        );
+        app.state.source_playlist = scan.playlist;
+        rebuild_active_playlist_and_reconcile_current(app);
     }
 }
 
@@ -631,7 +723,7 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
                 
                 if let Some(parent) = path.parent() {
                     if Some(parent.to_path_buf()) == app.state.current_folder {
-                        if let Some(idx) = app.state.playlist.iter().position(|p| p == path) {
+                        if let Some(idx) = app.state.active_playlist.iter().position(|p| p == path) {
                             app.state.current_index = idx;
                         } else {
                             should_scan = true;
@@ -640,7 +732,8 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
                         // --- THE FIX: PREVENT ASYNC RACE CONDITIONS ---
                         // Immediately invalidate the old folder's state
                         app.state.current_folder = Some(parent.to_path_buf());
-                        app.state.playlist.clear(); 
+                        app.state.source_playlist.clear();
+                        app.state.active_playlist.clear();
                         app.state.current_index = 0;
                         should_scan = true;
                     }

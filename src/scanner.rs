@@ -49,7 +49,6 @@ pub struct DirectoryState {
     pub request_id: u64,
     pub folder_path: PathBuf,
     pub playlist: Vec<PathBuf>,
-    pub current_index: usize,
 }
 
 pub fn spawn_directory_scanner(id_tracker: Arc<AtomicU64>) -> (Sender<ScanRequest>, Receiver<DirectoryState>) {
@@ -165,8 +164,6 @@ pub fn spawn_directory_scanner(id_tracker: Arc<AtomicU64>) -> (Sender<ScanReques
                     playlist.reverse();
                 }
 
-                let current_index = playlist.iter().position(|p| p == &request.target_path).unwrap_or(0);
-
                 if id_tracker.load(Ordering::Acquire) != request.request_id {
                     continue;
                 }
@@ -175,7 +172,6 @@ pub fn spawn_directory_scanner(id_tracker: Arc<AtomicU64>) -> (Sender<ScanReques
                     request_id: request.request_id,
                     folder_path: folder.to_path_buf(),
                     playlist,
-                    current_index,
                 });
             }
         }
