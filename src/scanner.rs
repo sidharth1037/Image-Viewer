@@ -57,7 +57,10 @@ pub fn spawn_directory_scanner(id_tracker: Arc<AtomicU64>) -> (Sender<ScanReques
     let (res_tx, res_rx) = channel::<DirectoryState>();
 
     std::thread::spawn(move || {
-        let valid_exts = ["webp", "avif", "jxl", "png", "jpg", "jpeg", "gif", "tif", "tiff", "bmp", "ico"];
+        let valid_exts = [
+            "webp", "avif", "heic", "heif", "hif", "jxl", "png", "jpg", "jpeg", "gif", "tif",
+            "tiff", "bmp", "ico",
+        ];
 
         while let Ok(mut request) = req_rx.recv() {
             // Keep only the latest scan request to avoid stale scans after rapid UI actions.

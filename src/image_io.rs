@@ -36,6 +36,17 @@ fn pad_rgb_to_rgba(rgb_pixels: &[u8]) -> Vec<u8> {
     rgba_pixels
 }
 
+fn looks_like_heif(file_bytes: &[u8]) -> bool {
+    if file_bytes.len() < 12 || &file_bytes[4..8] != b"ftyp" {
+        return false;
+    }
+
+    matches!(
+        &file_bytes[8..12],
+        b"heic" | b"heix" | b"hevc" | b"hevx" | b"mif1" | b"mif2"
+    )
+}
+
 /// --- In-Memory Pixel Rotator ---
 /// Takes a flat RGBA pixel array and physically rearranges the bytes based on EXIF rules.
 fn apply_exif_orientation(
@@ -198,18 +209,6 @@ fn decode_image_request(
     }
     let file_bytes = std::fs::read(path)?;
 
-    // VERSION CHECK: Abort before EXIF parsing if request is now stale.
-    if id_tracker.load(Ordering::Acquire) != req_id {
-        return Err("Stale Request".into());
-    }
-    let exif_orientation = match exif::Reader::new().read_from_container(&mut std::io::Cursor::new(&file_bytes)) {
-        Ok(exif) => match exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY) {
-            Some(field) => field.value.get_uint(0).unwrap_or(1) as u32,
-            None => 1,
-        },
-        Err(_) => 1,
-    };
-
     // Determine format routing via magic bytes instead of extension.
     let ext_fallback = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
 
@@ -223,10 +222,25 @@ fn decode_image_request(
         "gif"
     } else if file_bytes.len() >= 12 && &file_bytes[4..12] == b"ftypavif" {
         "avif"
+    } else if looks_like_heif(&file_bytes) {
+        "heic"
     } else if file_bytes.starts_with(&[0xFF, 0x0A]) || file_bytes.starts_with(&[0x00, 0x00, 0x00, 0x0C, b'J', b'X', b'L']) {
         "jxl"
     } else {
         ext_fallback.as_str()
+    };
+
+    // VERSION CHECK: Abort before EXIF parsing if request is now stale.
+    if id_tracker.load(Ordering::Acquire) != req_id {
+        return Err("Stale Request".into());
+    }
+
+    // libheif already applies HEIF transforms (rotation/mirroring/crop),
+    // so running EXIF rotation again can double-rotate some files.
+    let exif_orientation = if matches!(format_str, "heic" | "heif" | "hif") {
+        1
+    } else {
+        exif_orientation_from_container(&file_bytes)
     };
 
     // VERSION CHECK: Abort before the heavy decoding step.
@@ -253,12 +267,68 @@ fn decode_image_request(
         "avif" => {
             let dynamic_img = libavif_image::read(&file_bytes)
                 .map_err(|e| format!("AVIF Decode Error: {}", e))?;
-
             let w = dynamic_img.width();
             let h = dynamic_img.height();
             let px = dynamic_img.into_rgba8().into_raw();
 
             (w, h, vec![ImageFrame { pixels: px, duration_ms: 0 }])
+        }
+        "heic" | "heif" | "hif" => {
+            use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
+
+            let context = HeifContext::read_from_bytes(&file_bytes)
+                .map_err(|e| format!("HEIF Context Error: {}", e))?;
+            let handle = context
+                .primary_image_handle()
+                .map_err(|e| format!("HEIF Primary Image Error: {}", e))?;
+
+            let has_alpha = handle.has_alpha_channel();
+            let requested_space = if has_alpha {
+                ColorSpace::Rgb(RgbChroma::Rgba)
+            } else {
+                ColorSpace::Rgb(RgbChroma::Rgb)
+            };
+
+            let image = LibHeif::new()
+                .decode(&handle, requested_space, None)
+                .map_err(|e| format!("HEIF Decode Error: {}", e))?;
+
+            let plane = image
+                .planes()
+                .interleaved
+                .ok_or("HEIF Decode Error: image is not interleaved")?;
+
+            let bytes_per_pixel = (plane.storage_bits_per_pixel / 8) as usize;
+            if bytes_per_pixel != 3 && bytes_per_pixel != 4 {
+                return Err(format!("HEIF Decode Error: unsupported pixel layout ({} bpp)", plane.storage_bits_per_pixel).into());
+            }
+
+            let row_size = plane.width as usize * bytes_per_pixel;
+            if row_size > plane.stride {
+                return Err("HEIF Decode Error: row size exceeds stride".into());
+            }
+
+            let mut px = Vec::with_capacity((plane.width * plane.height * bytes_per_pixel as u32) as usize);
+            for row in plane
+                .data
+                .chunks_exact(plane.stride)
+                .take(plane.height as usize)
+            {
+                px.extend_from_slice(&row[..row_size]);
+            }
+
+            if bytes_per_pixel == 3 {
+                px = pad_rgb_to_rgba(&px);
+            }
+
+            (
+                plane.width,
+                plane.height,
+                vec![ImageFrame {
+                    pixels: px,
+                    duration_ms: 0,
+                }],
+            )
         }
         "jxl" => {
             let jxl_decoder = jxl_oxide::integration::JxlDecoder::new(std::io::Cursor::new(&file_bytes))
@@ -389,3 +459,18 @@ fn decode_image_request(
         frames: oriented_frames,
     })
 }
+
+fn parse_exif_orientation(exif: &exif::Exif) -> Option<u32> {
+    exif.get_field(exif::Tag::Orientation, exif::In::PRIMARY)
+        .and_then(|field| field.value.get_uint(0))
+        .map(|v| v as u32)
+        .filter(|v| (1..=8).contains(v))
+}
+
+fn exif_orientation_from_container(file_bytes: &[u8]) -> u32 {
+    match exif::Reader::new().read_from_container(&mut std::io::Cursor::new(file_bytes)) {
+        Ok(exif) => parse_exif_orientation(&exif).unwrap_or(1),
+        Err(_) => 1,
+    }
+}
+
