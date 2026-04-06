@@ -101,6 +101,15 @@ pub fn render(app: &ImageApp, ctx: &egui::Context) {
                 .show(ctx, |ui| {
                     ui.set_width(ctx.content_rect().width());
                     ui.set_height(BOTTOM_BAR_HEIGHT);
+
+                    // Consume pointer input across the full overlay so canvas interactions
+                    // never fire through non-interactive portions of the bar.
+                    let _overlay_input = ui.interact(
+                        ui.max_rect(),
+                        egui::Id::new("bottom_bar_input_shield"),
+                        egui::Sense::click_and_drag(),
+                    );
+
                     let active_stroke =
                         egui::Stroke::new(1.0, ui.visuals().strong_text_color().gamma_multiply(0.8));
 

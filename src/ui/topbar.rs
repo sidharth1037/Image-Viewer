@@ -4,8 +4,9 @@ use crate::ui::sort_controls;
 use egui_phosphor::regular as icons;
 
 const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
+const TOPBAR_HEIGHT: f32 = 22.0;
 const SORT_POPUP_ID: &str = "sort_hover_menu";
-const TOPBAR_FIXED_RESERVED_WIDTH: f32 = 172.0;
+const TOPBAR_FIXED_RESERVED_WIDTH: f32 = 120.0;
 const TOPBAR_MIN_TITLE_WIDTH_BEFORE_HIDING: f32 = 150.0;
 
 #[derive(Clone, Copy)]
@@ -201,10 +202,20 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     ui.set_width(ctx.content_rect().width());
+                    ui.set_height(TOPBAR_HEIGHT);
+
+                    // Consume pointer input across the full overlay so canvas interactions
+                    // never fire through non-interactive portions of the bar.
+                    let _overlay_input = ui.interact(
+                        ui.max_rect(),
+                        egui::Id::new("top_bar_input_shield"),
+                        egui::Sense::click_and_drag(),
+                    );
+
                     let active_stroke = egui::Stroke::new(1.0, ui.visuals().strong_text_color().gamma_multiply(0.8));
                     
                     egui::Frame::menu(ui.style()).stroke(active_stroke).show(ui, |ui| {
-                        ui.set_height(22.0);
+                        ui.set_height(TOPBAR_HEIGHT);
                         render_content(app, ui, ctx);
                     });
                 });

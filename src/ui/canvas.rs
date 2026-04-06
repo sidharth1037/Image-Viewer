@@ -21,7 +21,7 @@ pub fn render(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut ViewerState, l
         
         let scale_w = canvas_size.x / image_size.x;
         let scale_h = canvas_size.y / image_size.y;
-        fit_scale = scale_w.min(scale_h);
+        fit_scale = scale_w.min(scale_h).min(1.0);
 
         // When auto_fit is enabled, the image is locked to the window dimensions.
         if state.auto_fit {
@@ -30,14 +30,12 @@ pub fn render(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut ViewerState, l
         }
     }
 
-    // Child UIs (like error labels) can steal hover from `response`, so keep a global fallback.
-    let pointer_pos = response
-        .interact_pointer_pos()
-        .or(response.hover_pos())
-        .or(ctx.pointer_hover_pos());
+    // Only track pointer while the canvas interaction region actually owns it.
+    // This prevents overlay UI (top/bottom bars) from leaking clicks into navigation.
+    let pointer_pos = response.interact_pointer_pos().or(response.hover_pos());
     let left_zone_bound = response.rect.min.x + canvas_size.x * 0.08;
     let right_zone_bound = response.rect.max.x - canvas_size.x * 0.08;
-    let pointer_in_canvas = pointer_pos.map_or(false, |p| response.rect.contains(p));
+    let pointer_in_canvas = response.contains_pointer();
     
     let in_left_zone = pointer_in_canvas && pointer_pos.map_or(false, |p| p.x < left_zone_bound);
     let in_right_zone = pointer_in_canvas && pointer_pos.map_or(false, |p| p.x > right_zone_bound);
@@ -67,15 +65,7 @@ pub fn render(ctx: &egui::Context, ui: &mut egui::Ui, state: &mut ViewerState, l
     // Navigation Input: Handles clicks and double-clicks within the 8% edge zones.
     // Double clicks in these zones will navigate twice rather than triggering zoom.
     if state.reset_start_time.is_none() {
-        let clicked_on_canvas = ctx.input(|i| {
-            i.pointer.button_clicked(egui::PointerButton::Primary)
-                && i
-                    .pointer
-                    .interact_pos()
-                    .map_or(false, |p| response.rect.contains(p))
-        });
-
-        if response.clicked() || response.double_clicked() || clicked_on_canvas {
+        if response.clicked() || response.double_clicked() {
             if in_left_zone && has_prev {
                 nav_action = Some(-1);
             } else if in_right_zone && has_next {
