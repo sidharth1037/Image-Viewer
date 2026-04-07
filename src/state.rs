@@ -31,6 +31,7 @@ pub struct ViewerState {
     pub target_scale: Option<f32>, // The scale we are moving toward
     pub target_pan: Option<Vec2>,   // The pan offset we are moving toward
     pub reset_start_time: Option<f64>, // Stores the timestamp when double-click happened
+    pub last_canvas_size: Vec2,
 
 // --- Image Data & Animation ---
     pub frames: Vec<TextureHandle>,
@@ -38,6 +39,7 @@ pub struct ViewerState {
     pub current_frame: usize,
     pub last_frame_time: Option<f64>,
     pub image_resolution: Option<(u32, u32)>,
+    pub image_density: Option<crate::image_io::ImageDensity>,
     pub current_file_size_bytes: Option<u64>,
     pub load_error: Option<String>,
     
@@ -90,11 +92,13 @@ impl ViewerState {
             target_scale: None,
             target_pan: None,
             reset_start_time: None,
+            last_canvas_size: Vec2::ZERO,
             frames: Vec::new(),
             frame_durations: Vec::new(),
             current_frame: 0,
             last_frame_time: None,
             image_resolution: None,
+            image_density: None,
             current_file_size_bytes: None,
             load_error: None,
             load_id,

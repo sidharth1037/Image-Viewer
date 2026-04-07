@@ -3,6 +3,27 @@
 version = 4
 
 [[package]]
+name = "Image_Viewer"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "egui-phosphor",
+ "image",
+ "jxl-oxide",
+ "kamadak-exif",
+ "lexical-sort",
+ "libavif-image",
+ "libheif-rs",
+ "raw-window-handle",
+ "serde",
+ "serde_json",
+ "webp",
+ "windows-sys 0.52.0",
+ "zune-jpeg",
+ "zune-png",
+]
+
+[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1832,25 +1853,6 @@ checksum = "525e9ff3e1a4be2fbea1fdf0e98686a6d98b4d8f937e1bf7402245af1909e8c3"
 dependencies = [
  "byteorder-lite",
  "quick-error",
-]
-
-[[package]]
-name = "image_viewer"
-version = "0.1.0"
-dependencies = [
- "eframe",
- "egui-phosphor",
- "image",
- "jxl-oxide",
- "kamadak-exif",
- "lexical-sort",
- "libavif-image",
- "libheif-rs",
- "raw-window-handle",
- "webp",
- "windows-sys 0.52.0",
- "zune-jpeg",
- "zune-png",
 ]
 
 [[package]]

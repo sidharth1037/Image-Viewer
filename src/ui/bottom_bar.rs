@@ -3,6 +3,8 @@ use eframe::egui;
 
 const BOTTOM_BAR_HEIGHT: f32 = 28.0;
 const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
+const SCALE_INPUT_ID: &str = "bottom_bar_scale_input";
+const INDEX_INPUT_ID: &str = "bottom_bar_index_input";
 
 fn format_file_size(bytes: u64) -> String {
     const KB: f64 = 1024.0;
@@ -46,7 +48,122 @@ fn is_bottom_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
     }
 }
 
-fn render_content(app: &ImageApp, ui: &mut egui::Ui) {
+fn text_like_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let mut button_style: egui::Style = ui.style().as_ref().clone();
+    button_style.spacing.button_padding = egui::vec2(4.0, 1.0);
+    button_style.visuals.widgets.inactive.bg_fill = egui::Color32::TRANSPARENT;
+    button_style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+    button_style.visuals.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+    button_style.visuals.widgets.inactive.fg_stroke.color = ui.visuals().text_color();
+    button_style.visuals.widgets.hovered.bg_fill =
+        ui.visuals().widgets.hovered.weak_bg_fill.gamma_multiply(1.25);
+    button_style.visuals.widgets.hovered.weak_bg_fill =
+        ui.visuals().widgets.hovered.weak_bg_fill.gamma_multiply(1.25);
+    button_style.visuals.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+    button_style.visuals.widgets.hovered.fg_stroke.color = ui.visuals().text_color();
+    button_style.visuals.widgets.active = button_style.visuals.widgets.hovered;
+
+    let response = ui.scope(|ui| {
+        ui.set_style(button_style);
+        ui.add(
+            egui::Button::new(egui::RichText::new(text).text_style(egui::TextStyle::Body))
+                .frame(true)
+                .min_size(egui::vec2(0.0, 0.0)),
+        )
+    });
+
+    if response.inner.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+    }
+
+    response.inner
+}
+
+fn scale_bounds_percent(app: &ImageApp, ctx: &egui::Context) -> (f32, f32, f32, f32, f32) {
+    let canvas_size = if app.state.last_canvas_size.x > 0.0 && app.state.last_canvas_size.y > 0.0 {
+        app.state.last_canvas_size
+    } else {
+        ctx.content_rect().size()
+    };
+
+    if let Some(metrics) = crate::ui::canvas::compute_zoom_metrics(
+        ctx,
+        &app.state,
+        canvas_size,
+        app.settings.fit_all_images_to_window,
+        app.settings.pixel_based_1_to_1,
+    ) {
+        (
+            metrics.current_percent,
+            metrics.min_percent,
+            metrics.max_percent,
+            metrics.actual_scale,
+            metrics.min_zoom_scale,
+        )
+    } else {
+        (
+            app.state.scale * 100.0,
+            100.0,
+            crate::ui::canvas::MAX_ZOOM_MULTIPLIER * 100.0,
+            1.0,
+            0.01,
+        )
+    }
+}
+
+fn commit_scale_input(app: &mut ImageApp, ctx: &egui::Context) {
+    let input = app.bottom_bar_scale_input.trim();
+    if input.is_empty() {
+        app.bottom_bar_scale_editing = false;
+        return;
+    }
+
+    if let Ok(percent) = input.parse::<f32>() {
+        let (_, min_percent, max_percent, actual_scale, min_zoom_scale) = scale_bounds_percent(app, ctx);
+        let clamped_percent = percent.clamp(min_percent, max_percent);
+        let max_zoom_scale = actual_scale * crate::ui::canvas::MAX_ZOOM_MULTIPLIER;
+        let new_scale = (actual_scale * (clamped_percent / 100.0))
+            .clamp(min_zoom_scale, max_zoom_scale);
+
+        app.state.auto_fit = false;
+        app.state.scale = new_scale;
+        app.state.target_scale = None;
+        app.state.target_pan = None;
+        app.state.reset_start_time = None;
+    }
+
+    app.bottom_bar_scale_editing = false;
+    app.bottom_bar_scale_focus_pending = false;
+}
+
+fn commit_index_input(app: &mut ImageApp) {
+    let input = app.bottom_bar_index_input.trim();
+    if input.is_empty() {
+        app.bottom_bar_index_editing = false;
+        return;
+    }
+
+    if let Ok(index_one_based) = input.parse::<usize>() {
+        if !app.state.active_playlist.is_empty() {
+            let clamped = index_one_based.clamp(1, app.state.active_playlist.len());
+            crate::handlers::jump_to_index(app, clamped);
+        }
+    }
+
+    app.bottom_bar_index_editing = false;
+    app.bottom_bar_index_focus_pending = false;
+}
+
+fn set_cursor_to_end(ctx: &egui::Context, text_id: egui::Id, char_count: usize) {
+    if let Some(mut state) = egui::TextEdit::load_state(ctx, text_id) {
+        let cursor = egui::text::CCursor::new(char_count);
+        let range = egui::text_selection::CCursorRange::one(cursor);
+        state.cursor.set_char_range(Some(range));
+        state.store(ctx, text_id);
+    }
+}
+
+fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
     let has_loaded_image = !app.state.frames.is_empty() && app.state.load_error.is_none();
     if !has_loaded_image {
         // Keep geometry stable without consuming the full unconstrained overlay height.
@@ -66,34 +183,147 @@ fn render_content(app: &ImageApp, ui: &mut egui::Ui) {
         .map(|(w, h)| format!("{}x{}", w, h))
         .unwrap_or_else(|| "--".to_string());
 
-    let scale_text = format!("{:.0}%", app.state.scale * 100.0);
+    let (scale_percent, min_percent, max_percent, _actual_scale, _min_zoom_scale) =
+        scale_bounds_percent(app, ctx);
+    let scale_text = format!("{:.0}%", scale_percent);
 
     let (index, total) = if app.state.active_playlist.is_empty() {
         (1, 1)
     } else {
         (app.state.current_index + 1, app.state.active_playlist.len())
     };
-    let playlist_text = format!("{} of {}", index, total);
+
+    let mut scale_input_rect = None;
+    let mut index_input_rect = None;
+
+    if !app.bottom_bar_scale_editing && !app.bottom_bar_index_editing {
+        app.bottom_bar_edit_just_opened = false;
+    }
 
     // Restored to horizontal_centered to guarantee text correctly anchors to the far left and far right edges.
     ui.horizontal_centered(|ui| {
         ui.add_space(8.0);
-        ui.label(format!("{}  |  {}", size_text, resolution_text));
+        let left_label = ui.label(format!("{}  |  {}", size_text, resolution_text));
+        if left_label.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+        }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_space(8.0);
-            ui.label(playlist_text);
-            ui.label("|");
-            ui.label(scale_text);
+
+            ui.horizontal(|ui| {
+                let prev_spacing = ui.spacing().item_spacing.x;
+                ui.spacing_mut().item_spacing.x = 2.0;
+
+                let suffix = ui.label(format!(" of {}", total));
+                if suffix.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+                }
+
+                if app.bottom_bar_index_editing {
+                    app.bottom_bar_index_input.retain(|c| c.is_ascii_digit());
+                    let desired_w = 56.0;
+                    let text_id = egui::Id::new(INDEX_INPUT_ID);
+                    let text_resp = ui.add_sized(
+                        [desired_w, ui.spacing().interact_size.y],
+                        egui::TextEdit::singleline(&mut app.bottom_bar_index_input)
+                            .id_source(text_id)
+                            .hint_text(format!("1-{}", total)),
+                    );
+                    index_input_rect = Some(text_resp.rect);
+
+                    if app.bottom_bar_index_focus_pending {
+                        text_resp.request_focus();
+                        set_cursor_to_end(ctx, text_id, app.bottom_bar_index_input.chars().count());
+                        app.bottom_bar_index_focus_pending = false;
+                    }
+
+                    if text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        commit_index_input(app);
+                    }
+                } else {
+                    let index_resp = text_like_button(ui, &index.to_string());
+                    if index_resp.clicked() {
+                        app.bottom_bar_index_editing = true;
+                        app.bottom_bar_scale_editing = false;
+                        app.bottom_bar_index_input = index.to_string();
+                        app.bottom_bar_index_focus_pending = true;
+                        app.bottom_bar_scale_focus_pending = false;
+                        app.bottom_bar_edit_just_opened = true;
+                    }
+                }
+
+                ui.spacing_mut().item_spacing.x = prev_spacing;
+            });
+
+            let sep = ui.label("|");
+            if sep.hovered() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+            }
+
+            if app.bottom_bar_scale_editing {
+                app.bottom_bar_scale_input.retain(|c| c.is_ascii_digit());
+                let desired_w = 76.0;
+                let text_id = egui::Id::new(SCALE_INPUT_ID);
+                let text_resp = ui.add_sized(
+                    [desired_w, ui.spacing().interact_size.y],
+                    egui::TextEdit::singleline(&mut app.bottom_bar_scale_input)
+                        .id_source(text_id)
+                        .hint_text(format!("{:.0}-{:.0}", min_percent, max_percent)),
+                );
+                scale_input_rect = Some(text_resp.rect);
+
+                if app.bottom_bar_scale_focus_pending {
+                    text_resp.request_focus();
+                    set_cursor_to_end(ctx, text_id, app.bottom_bar_scale_input.chars().count());
+                    app.bottom_bar_scale_focus_pending = false;
+                }
+
+                if text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    commit_scale_input(app, ctx);
+                }
+            } else {
+                let scale_resp = text_like_button(ui, &scale_text);
+                if scale_resp.clicked() {
+                    app.bottom_bar_scale_editing = true;
+                    app.bottom_bar_index_editing = false;
+                    app.bottom_bar_scale_input = format!("{:.0}", scale_percent.round());
+                    app.bottom_bar_scale_focus_pending = true;
+                    app.bottom_bar_index_focus_pending = false;
+                    app.bottom_bar_edit_just_opened = true;
+                }
+            }
         });
     });
+
+    let is_editing = app.bottom_bar_scale_editing || app.bottom_bar_index_editing;
+    if is_editing && !app.bottom_bar_edit_just_opened && ctx.input(|i| i.pointer.any_pressed()) {
+        let clicked_outside = ctx.pointer_interact_pos().is_some_and(|pos| {
+            let scale_outside = scale_input_rect.is_none_or(|r| !r.contains(pos));
+            let index_outside = index_input_rect.is_none_or(|r| !r.contains(pos));
+            scale_outside && index_outside
+        });
+
+        if clicked_outside {
+            if app.bottom_bar_scale_editing {
+                commit_scale_input(app, ctx);
+            }
+            if app.bottom_bar_index_editing {
+                commit_index_input(app);
+            }
+        }
+    }
+
+    app.bottom_bar_edit_just_opened = false;
 }
 
-pub fn render(app: &ImageApp, ctx: &egui::Context) {
+pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
     let is_immersive = app.state.is_fullscreen && app.settings.immersive_maximized;
+    let is_editing = app.bottom_bar_scale_editing || app.bottom_bar_index_editing;
 
     if is_immersive {
-        let show_bars = app.show_sort_menu || app.show_filter_popup || is_bottom_visible_in_immersive(app, ctx);
+        let show_bars =
+            is_editing || app.show_sort_menu || app.show_filter_popup || is_bottom_visible_in_immersive(app, ctx);
         if show_bars {
             egui::Area::new(egui::Id::new("bottom_bar_overlay"))
                 .fixed_pos(egui::pos2(0.0, ctx.content_rect().max.y - BOTTOM_BAR_HEIGHT))
@@ -115,7 +345,7 @@ pub fn render(app: &ImageApp, ctx: &egui::Context) {
 
                     egui::Frame::menu(ui.style()).stroke(active_stroke).show(ui, |ui| {
                         ui.set_height(BOTTOM_BAR_HEIGHT);
-                        render_content(app, ui);
+                        render_content(app, ctx, ui);
                     });
                 });
         }
@@ -152,7 +382,7 @@ pub fn render(app: &ImageApp, ctx: &egui::Context) {
             .exact_height(BOTTOM_BAR_HEIGHT)
             .show(ctx, |ui| {
                 // BUG FIX: Removed ui.set_height() here so it doesn't fight horizontal_centered's math
-                render_content(app, ui);
+                render_content(app, ctx, ui);
             });
 
         let rect = panel_res.response.rect;

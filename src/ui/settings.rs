@@ -23,6 +23,12 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             
             ui.checkbox(&mut app.settings.immersive_maximized, "Immersive Maximized Mode")
                 .on_hover_text("When maximized, auto-hide the top bar to show the image in full screen.");
+
+            ui.checkbox(&mut app.settings.fit_all_images_to_window, "Fit all images to window")
+                .on_hover_text("When enabled, newly shown images start fitted to the canvas. Small images can still zoom out to actual size.");
+
+            ui.checkbox(&mut app.settings.pixel_based_1_to_1, "Use pixel-based 1:1 scale")
+                .on_hover_text("When enabled, 100% scale maps one image pixel to one screen pixel. If disabled, true-size mode can use DPI metadata when available.");
             
             ui.add_space(12.0);
 

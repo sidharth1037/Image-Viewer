@@ -172,6 +172,7 @@ fn reset_view_for_new_file(app: &mut ImageApp) {
     app.state.current_frame = 0;
     app.state.last_frame_time = None;
     app.state.image_resolution = None;
+    app.state.image_density = None;
     app.state.load_error = None;
     app.state.auto_fit = true;
     app.state.pan = egui::Vec2::ZERO;
@@ -195,6 +196,7 @@ fn clear_current_view_for_empty_playlist(app: &mut ImageApp) {
     app.state.current_frame = 0;
     app.state.last_frame_time = None;
     app.state.image_resolution = None;
+    app.state.image_density = None;
     app.state.load_error = None;
     app.state.original_pixels.clear();
     app.state.adjustments_dirty = false;
@@ -249,6 +251,7 @@ fn apply_loaded_image(app: &mut ImageApp, ctx: &egui::Context, loaded_image: cra
     app.state.current_frame = 0;
     app.state.last_frame_time = None;
     app.state.image_resolution = Some((loaded_image.width, loaded_image.height));
+    app.state.image_density = loaded_image.density;
 
     // Store original pixels for non-destructive adjustment recomputation
     app.state.original_pixels.clear();
@@ -280,10 +283,12 @@ fn apply_loaded_image(app: &mut ImageApp, ctx: &egui::Context, loaded_image: cra
 }
 
 pub fn sync_window_state(app: &mut ImageApp, ctx: &egui::Context) {
-    let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
-    if is_maximized != app.state.is_fullscreen {
-        app.state.is_fullscreen = is_maximized;
+    if let Some(is_maximized) = ctx.input(|i| i.viewport().maximized) {
+        if is_maximized != app.state.is_fullscreen {
+            app.state.is_fullscreen = is_maximized;
+        }
     }
+
     if let Some(focused) = ctx.input(|i| i.viewport().focused) {
         if focused && !app.is_focused {
             let now = ctx.input(|i| i.time);
@@ -324,6 +329,7 @@ pub fn process_image_loading(app: &mut ImageApp, ctx: &egui::Context) {
                 }
                 app.state.frames.clear();
                 app.state.image_resolution = None;
+                app.state.image_density = None;
                 app.state.load_error = Some(format!("Unsupported or invalid file:\n{}", load_failure.message));
             }
         }
@@ -364,11 +370,30 @@ pub fn navigate(app: &mut ImageApp, direction: i32) {
     }
 }
 
+pub fn jump_to_index(app: &mut ImageApp, one_based_index: usize) {
+    if app.state.active_playlist.is_empty() {
+        return;
+    }
+
+    let playlist_len = app.state.active_playlist.len();
+    let target_index = one_based_index.saturating_sub(1).min(playlist_len - 1);
+    if target_index == app.state.current_index {
+        return;
+    }
+
+    let direction = if target_index > app.state.current_index { 1 } else { -1 };
+    app.state.preload.on_navigation_away(direction);
+    app.state.current_index = target_index;
+    let target_path = app.state.active_playlist[target_index].clone();
+    load_target_file(app, target_path);
+}
+
 pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     let shortcuts = app.settings.shortcuts;
     let input = ctx.input(|i| {
         (
             i.time,
+            i.modifiers.alt,
             shortcuts.navigate_next.is_pressed(i),
             shortcuts.navigate_prev.is_pressed(i),
             shortcuts.jump_to_start.is_pressed(i),
@@ -399,6 +424,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
 
     let (
         time,
+        alt_held,
         go_next,
         go_prev,
         jump_start,
@@ -425,6 +451,18 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         reset_all,
         show_original_hold,
     ) = input;
+
+    if app.bottom_bar_scale_editing || app.bottom_bar_index_editing {
+        return;
+    }
+
+    if app.state.show_original_while_held != show_original_hold {
+        app.state.show_original_while_held = show_original_hold;
+        app.state.adjustments_dirty = true;
+        if show_original_hold {
+            set_overlay_message(app, time, "Shortcut: Show original");
+        }
+    }
 
     if app.show_filter_popup {
         if toggle_search {
@@ -486,142 +524,110 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    if let Some(multiplier) = saturation_down {
-        let changed = {
-            let saturation = &mut app.state.adjustments.saturation;
-            saturation.adjust_by(-crate::adjustments::saturation::SaturationAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Saturation);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
-    if let Some(multiplier) = saturation_up {
-        let changed = {
-            let saturation = &mut app.state.adjustments.saturation;
-            saturation.adjust_by(crate::adjustments::saturation::SaturationAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Saturation);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
+    let allow_plain_adjustments = !alt_held && !show_original_hold;
 
-    if let Some(multiplier) = contrast_down {
-        let changed = {
-            let contrast = &mut app.state.adjustments.contrast;
-            contrast.adjust_by(-crate::adjustments::contrast::ContrastAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Contrast);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
-    if let Some(multiplier) = contrast_up {
-        let changed = {
-            let contrast = &mut app.state.adjustments.contrast;
-            contrast.adjust_by(crate::adjustments::contrast::ContrastAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Contrast);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
+    if allow_plain_adjustments {
+        if let Some(multiplier) = saturation_down {
+            let changed = {
+                let saturation = &mut app.state.adjustments.saturation;
+                saturation.adjust_by(-crate::adjustments::saturation::SaturationAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Saturation);
+            mark_adjustments_changed(app, changed);
+        }
+        if let Some(multiplier) = saturation_up {
+            let changed = {
+                let saturation = &mut app.state.adjustments.saturation;
+                saturation.adjust_by(crate::adjustments::saturation::SaturationAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Saturation);
+            mark_adjustments_changed(app, changed);
+        }
 
-    if let Some(multiplier) = gamma_down {
-        let changed = {
-            let gamma = &mut app.state.adjustments.gamma;
-            gamma.adjust_by(-crate::adjustments::gamma::GammaAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Gamma);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
-    if let Some(multiplier) = gamma_up {
-        let changed = {
-            let gamma = &mut app.state.adjustments.gamma;
-            gamma.adjust_by(crate::adjustments::gamma::GammaAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Gamma);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
+        if let Some(multiplier) = contrast_down {
+            let changed = {
+                let contrast = &mut app.state.adjustments.contrast;
+                contrast.adjust_by(-crate::adjustments::contrast::ContrastAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Contrast);
+            mark_adjustments_changed(app, changed);
+        }
+        if let Some(multiplier) = contrast_up {
+            let changed = {
+                let contrast = &mut app.state.adjustments.contrast;
+                contrast.adjust_by(crate::adjustments::contrast::ContrastAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Contrast);
+            mark_adjustments_changed(app, changed);
+        }
 
-    if let Some(multiplier) = exposure_down {
-        let changed = {
-            let exposure = &mut app.state.adjustments.exposure;
-            exposure.adjust_by(-crate::adjustments::exposure::ExposureAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Exposure);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
-    if let Some(multiplier) = exposure_up {
-        let changed = {
-            let exposure = &mut app.state.adjustments.exposure;
-            exposure.adjust_by(crate::adjustments::exposure::ExposureAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Exposure);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
+        if let Some(multiplier) = gamma_down {
+            let changed = {
+                let gamma = &mut app.state.adjustments.gamma;
+                gamma.adjust_by(-crate::adjustments::gamma::GammaAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Gamma);
+            mark_adjustments_changed(app, changed);
+        }
+        if let Some(multiplier) = gamma_up {
+            let changed = {
+                let gamma = &mut app.state.adjustments.gamma;
+                gamma.adjust_by(crate::adjustments::gamma::GammaAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Gamma);
+            mark_adjustments_changed(app, changed);
+        }
 
-    if let Some(multiplier) = highlights_down {
-        let changed = {
-            let highlights = &mut app.state.adjustments.highlights;
-            highlights.adjust_by(-crate::adjustments::highlights::HighlightsAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Highlights);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
-    if let Some(multiplier) = highlights_up {
-        let changed = {
-            let highlights = &mut app.state.adjustments.highlights;
-            highlights.adjust_by(crate::adjustments::highlights::HighlightsAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Highlights);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
+        if let Some(multiplier) = exposure_down {
+            let changed = {
+                let exposure = &mut app.state.adjustments.exposure;
+                exposure.adjust_by(-crate::adjustments::exposure::ExposureAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Exposure);
+            mark_adjustments_changed(app, changed);
+        }
+        if let Some(multiplier) = exposure_up {
+            let changed = {
+                let exposure = &mut app.state.adjustments.exposure;
+                exposure.adjust_by(crate::adjustments::exposure::ExposureAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Exposure);
+            mark_adjustments_changed(app, changed);
+        }
 
-    if let Some(multiplier) = shadows_down {
-        let changed = {
-            let shadows = &mut app.state.adjustments.shadows;
-            shadows.adjust_by(-crate::adjustments::shadows::ShadowsAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Shadows);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
-    }
-    if let Some(multiplier) = shadows_up {
-        let changed = {
-            let shadows = &mut app.state.adjustments.shadows;
-            shadows.adjust_by(crate::adjustments::shadows::ShadowsAdjustment::STEP * multiplier)
-        };
-        show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Shadows);
-        mark_adjustments_changed(
-            app,
-            changed,
-        );
+        if let Some(multiplier) = highlights_down {
+            let changed = {
+                let highlights = &mut app.state.adjustments.highlights;
+                highlights.adjust_by(-crate::adjustments::highlights::HighlightsAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Highlights);
+            mark_adjustments_changed(app, changed);
+        }
+        if let Some(multiplier) = highlights_up {
+            let changed = {
+                let highlights = &mut app.state.adjustments.highlights;
+                highlights.adjust_by(crate::adjustments::highlights::HighlightsAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Highlights);
+            mark_adjustments_changed(app, changed);
+        }
+
+        if let Some(multiplier) = shadows_down {
+            let changed = {
+                let shadows = &mut app.state.adjustments.shadows;
+                shadows.adjust_by(-crate::adjustments::shadows::ShadowsAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Shadows);
+            mark_adjustments_changed(app, changed);
+        }
+        if let Some(multiplier) = shadows_up {
+            let changed = {
+                let shadows = &mut app.state.adjustments.shadows;
+                shadows.adjust_by(crate::adjustments::shadows::ShadowsAdjustment::STEP * multiplier)
+            };
+            show_adjustment_overlay(app, time, crate::adjustments::pipeline::AdjustmentTarget::Shadows);
+            mark_adjustments_changed(app, changed);
+        }
     }
 
     if reset_all {
@@ -633,13 +639,6 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         }
     }
 
-    if app.state.show_original_while_held != show_original_hold {
-        app.state.show_original_while_held = show_original_hold;
-        app.state.adjustments_dirty = true;
-        if show_original_hold {
-            set_overlay_message(app, time, "Shortcut: Show original");
-        }
-    }
 }
 
 fn mark_adjustments_changed(app: &mut ImageApp, changed: bool) {

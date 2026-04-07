@@ -192,7 +192,11 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
 
         // --- THE FIX: KEEP OPEN IF DROPDOWN IS ACTIVE ---
         // We force the top bar to stay visible if our custom hover menu is open.
-        if app.show_sort_menu || app.show_filter_popup {
+        if app.show_sort_menu
+            || app.show_filter_popup
+            || app.bottom_bar_scale_editing
+            || app.bottom_bar_index_editing
+        {
             show_bars = true;
         }
 

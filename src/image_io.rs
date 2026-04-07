@@ -16,7 +16,27 @@ pub struct LoadedImage {
     pub request_id: u64,
     pub width: u32,
     pub height: u32,
+    pub density: Option<ImageDensity>,
     pub frames: Vec<ImageFrame>, // Holds 1 frame for static images, many for GIFs
+}
+
+#[derive(Clone, Copy)]
+pub enum DensitySource {
+    Exif,
+    Container,
+}
+
+#[derive(Clone, Copy)]
+pub struct ImageDensity {
+    pub ppi_x: f32,
+    pub ppi_y: f32,
+    pub source: DensitySource,
+}
+
+impl ImageDensity {
+    pub fn average_ppi(self) -> f32 {
+        ((self.ppi_x + self.ppi_y) * 0.5).max(0.0001)
+    }
 }
 
 pub struct LoadFailure {
@@ -237,11 +257,18 @@ fn decode_image_request(
 
     // libheif already applies HEIF transforms (rotation/mirroring/crop),
     // so running EXIF rotation again can double-rotate some files.
-    let exif_orientation = if matches!(format_str, "heic" | "heif" | "hif") {
-        1
+    let exif_meta = if matches!(format_str, "heic" | "heif" | "hif") {
+        ExifMetadata {
+            orientation: 1,
+            density: None,
+        }
     } else {
-        exif_orientation_from_container(&file_bytes)
+        exif_metadata_from_container(&file_bytes)
     };
+    let exif_orientation = exif_meta.orientation;
+    let density = exif_meta
+        .density
+        .or_else(|| density_from_container(format_str, &file_bytes));
 
     // VERSION CHECK: Abort before the heavy decoding step.
     if id_tracker.load(Ordering::Acquire) != req_id {
@@ -456,6 +483,7 @@ fn decode_image_request(
         request_id: req_id,
         width: final_w,
         height: final_h,
+        density,
         frames: oriented_frames,
     })
 }
@@ -467,10 +495,200 @@ fn parse_exif_orientation(exif: &exif::Exif) -> Option<u32> {
         .filter(|v| (1..=8).contains(v))
 }
 
-fn exif_orientation_from_container(file_bytes: &[u8]) -> u32 {
+struct ExifMetadata {
+    orientation: u32,
+    density: Option<ImageDensity>,
+}
+
+fn exif_metadata_from_container(file_bytes: &[u8]) -> ExifMetadata {
     match exif::Reader::new().read_from_container(&mut std::io::Cursor::new(file_bytes)) {
-        Ok(exif) => parse_exif_orientation(&exif).unwrap_or(1),
-        Err(_) => 1,
+        Ok(exif) => ExifMetadata {
+            orientation: parse_exif_orientation(&exif).unwrap_or(1),
+            density: parse_exif_density(&exif),
+        },
+        Err(_) => ExifMetadata {
+            orientation: 1,
+            density: None,
+        },
     }
+}
+
+fn parse_exif_density(exif: &exif::Exif) -> Option<ImageDensity> {
+    use exif::Tag;
+
+    let unit = exif
+        .get_field(Tag::ResolutionUnit, exif::In::PRIMARY)
+        .and_then(|field| field.value.get_uint(0))
+        .unwrap_or(2);
+
+    let x = exif
+        .get_field(Tag::XResolution, exif::In::PRIMARY)
+        .and_then(|field| exif_value_to_f32(&field.value));
+    let y = exif
+        .get_field(Tag::YResolution, exif::In::PRIMARY)
+        .and_then(|field| exif_value_to_f32(&field.value));
+
+    let base = match (x, y) {
+        (Some(px), Some(py)) => Some((px, py)),
+        (Some(p), None) | (None, Some(p)) => Some((p, p)),
+        (None, None) => None,
+    }?;
+
+    let (mut ppi_x, mut ppi_y) = base;
+    match unit {
+        2 => {} // inches
+        3 => {
+            // centimeters -> inches
+            ppi_x *= 2.54;
+            ppi_y *= 2.54;
+        }
+        _ => return None, // unknown/no unit: no reliable physical density
+    }
+
+    normalize_density(ppi_x, ppi_y, DensitySource::Exif)
+}
+
+fn exif_value_to_f32(value: &exif::Value) -> Option<f32> {
+    match value {
+        exif::Value::Rational(vals) => vals.first().and_then(|r| {
+            if r.denom == 0 {
+                None
+            } else {
+                Some(r.num as f32 / r.denom as f32)
+            }
+        }),
+        exif::Value::SRational(vals) => vals.first().and_then(|r| {
+            if r.denom == 0 {
+                None
+            } else {
+                Some(r.num as f32 / r.denom as f32)
+            }
+        }),
+        exif::Value::Short(vals) => vals.first().map(|v| *v as f32),
+        exif::Value::Long(vals) => vals.first().map(|v| *v as f32),
+        _ => None,
+    }
+}
+
+fn normalize_density(ppi_x: f32, ppi_y: f32, source: DensitySource) -> Option<ImageDensity> {
+    let finite = ppi_x.is_finite() && ppi_y.is_finite();
+    let in_range = ppi_x > 1.0 && ppi_y > 1.0 && ppi_x < 20_000.0 && ppi_y < 20_000.0;
+    if !finite || !in_range {
+        return None;
+    }
+
+    Some(ImageDensity {
+        ppi_x,
+        ppi_y,
+        source,
+    })
+}
+
+fn density_from_container(format: &str, file_bytes: &[u8]) -> Option<ImageDensity> {
+    match format {
+        "png" => parse_png_phys_density(file_bytes),
+        "jpg" | "jpeg" => parse_jpeg_jfif_density(file_bytes),
+        _ => None,
+    }
+}
+
+fn parse_png_phys_density(file_bytes: &[u8]) -> Option<ImageDensity> {
+    const PNG_SIG: &[u8; 8] = b"\x89PNG\r\n\x1a\n";
+    if file_bytes.len() < 8 || &file_bytes[0..8] != PNG_SIG {
+        return None;
+    }
+
+    let mut offset = 8usize;
+    while offset + 12 <= file_bytes.len() {
+        let len = u32::from_be_bytes([
+            file_bytes[offset],
+            file_bytes[offset + 1],
+            file_bytes[offset + 2],
+            file_bytes[offset + 3],
+        ]) as usize;
+        let chunk_start = offset + 8;
+        let chunk_end = chunk_start.saturating_add(len);
+        if chunk_end + 4 > file_bytes.len() {
+            break;
+        }
+
+        let chunk_type = &file_bytes[offset + 4..offset + 8];
+        if chunk_type == b"pHYs" && len >= 9 {
+            let data = &file_bytes[chunk_start..chunk_end];
+            let x_ppu = u32::from_be_bytes([data[0], data[1], data[2], data[3]]) as f32;
+            let y_ppu = u32::from_be_bytes([data[4], data[5], data[6], data[7]]) as f32;
+            let unit = data[8];
+
+            if unit == 1 {
+                // pixels per meter -> pixels per inch
+                let ppi_x = x_ppu * 0.0254;
+                let ppi_y = y_ppu * 0.0254;
+                return normalize_density(ppi_x, ppi_y, DensitySource::Container);
+            }
+            return None;
+        }
+
+        offset = chunk_end + 4;
+    }
+
+    None
+}
+
+fn parse_jpeg_jfif_density(file_bytes: &[u8]) -> Option<ImageDensity> {
+    if file_bytes.len() < 4 || file_bytes[0] != 0xFF || file_bytes[1] != 0xD8 {
+        return None;
+    }
+
+    let mut i = 2usize;
+    while i + 4 <= file_bytes.len() {
+        if file_bytes[i] != 0xFF {
+            i += 1;
+            continue;
+        }
+
+        while i < file_bytes.len() && file_bytes[i] == 0xFF {
+            i += 1;
+        }
+        if i >= file_bytes.len() {
+            break;
+        }
+
+        let marker = file_bytes[i];
+        i += 1;
+
+        if marker == 0xD9 || marker == 0xDA {
+            break;
+        }
+
+        if i + 2 > file_bytes.len() {
+            break;
+        }
+        let seg_len = u16::from_be_bytes([file_bytes[i], file_bytes[i + 1]]) as usize;
+        i += 2;
+        if seg_len < 2 || i + (seg_len - 2) > file_bytes.len() {
+            break;
+        }
+
+        if marker == 0xE0 && seg_len >= 16 {
+            let segment = &file_bytes[i..i + (seg_len - 2)];
+            if segment.len() >= 14 && &segment[0..5] == b"JFIF\0" {
+                let unit = segment[7];
+                let x_density = u16::from_be_bytes([segment[8], segment[9]]) as f32;
+                let y_density = u16::from_be_bytes([segment[10], segment[11]]) as f32;
+
+                let (ppi_x, ppi_y) = match unit {
+                    1 => (x_density, y_density),
+                    2 => (x_density * 2.54, y_density * 2.54),
+                    _ => return None,
+                };
+
+                return normalize_density(ppi_x, ppi_y, DensitySource::Container);
+            }
+        }
+
+        i += seg_len - 2;
+    }
+
+    None
 }
 

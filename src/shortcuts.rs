@@ -68,10 +68,10 @@ impl Shortcut {
     }
 
     /// Returns speed multiplier for adjustment-style shortcuts.
-    /// 1.0 for exact match, 10.0 for Shift-augmented match when base shortcut doesn't use Shift.
+    /// 10.0 for exact match, 1.0 for Shift-augmented match when base shortcut doesn't use Shift.
     pub fn pressed_step_multiplier(&self, input: &egui::InputState) -> Option<f32> {
         if input.key_pressed(self.key) && self.modifiers_match(input.modifiers) {
-            return Some(1.0);
+            return Some(10.0);
         }
 
         let shifted_symbol_pressed = shifted_symbol_for_key(self.key).is_some_and(|symbol| {
@@ -88,7 +88,7 @@ impl Shortcut {
             && (input.key_pressed(self.key) || shifted_symbol_pressed)
             && self.modifiers_match_with_shift_override(input.modifiers, true)
         {
-            return Some(10.0);
+            return Some(1.0);
         }
 
         None
