@@ -182,6 +182,7 @@ fn reset_view_for_new_file(app: &mut ImageApp) {
     app.state.adjustments.reset_all();
     app.state.original_pixels.clear();
     app.state.adjustments_dirty = false;
+    app.state.rotation_quarter_turns = 0;
     app.state.overlay_last_changed = None;
     app.state.overlay_text = None;
     app.state.show_original_while_held = false;
@@ -200,6 +201,7 @@ fn clear_current_view_for_empty_playlist(app: &mut ImageApp) {
     app.state.load_error = None;
     app.state.original_pixels.clear();
     app.state.adjustments_dirty = false;
+    app.state.rotation_quarter_turns = 0;
 }
 
 fn rebuild_active_playlist_and_reconcile_current(app: &mut ImageApp) {
@@ -404,6 +406,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.sort_descending.is_pressed(i),
             shortcuts.toggle_settings.is_pressed(i),
             shortcuts.toggle_search.is_pressed(i),
+            shortcuts.rotate_clockwise.is_pressed(i),
             shortcuts.close_window.is_pressed(i),
             shortcuts.saturation_decrease.pressed_step_multiplier(i),
             shortcuts.saturation_increase.pressed_step_multiplier(i),
@@ -435,6 +438,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         sort_descending,
         toggle_settings,
         toggle_search,
+        rotate_clockwise,
         close_window,
         saturation_down,
         saturation_up,
@@ -517,6 +521,12 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     if toggle_search {
         toggle_filter_popup(app);
         set_overlay_message(app, time, "Shortcut: Toggle filter popup");
+    }
+
+    if rotate_clockwise {
+        app.state.rotation_quarter_turns = (app.state.rotation_quarter_turns + 1) % 4;
+        app.state.adjustments_dirty = true;
+        set_overlay_message(app, time, "Shortcut: Rotate 90 deg CW");
     }
 
     if close_window {
@@ -661,6 +671,38 @@ fn set_overlay_message(app: &mut ImageApp, time: f64, text: &str) {
     app.state.overlay_text = Some(text.to_string());
 }
 
+fn rotate_rgba_90_cw(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut out = vec![0u8; pixels.len()];
+
+    for y in 0..height {
+        for x in 0..width {
+            let src = (y * width + x) * 4;
+            let dst_x = height - 1 - y;
+            let dst_y = x;
+            let dst = (dst_y * height + dst_x) * 4;
+            out[dst..dst + 4].copy_from_slice(&pixels[src..src + 4]);
+        }
+    }
+
+    out
+}
+
+fn apply_rotation_quarter_turns(
+    mut pixels: Vec<u8>,
+    mut width: u32,
+    mut height: u32,
+    quarter_turns: u8,
+) -> (Vec<u8>, u32, u32) {
+    let turns = quarter_turns % 4;
+    for _ in 0..turns {
+        let rotated = rotate_rgba_90_cw(&pixels, width as usize, height as usize);
+        pixels = rotated;
+        std::mem::swap(&mut width, &mut height);
+    }
+
+    (pixels, width, height)
+}
+
 /// Rebuilds GPU textures from original pixels with current adjustments applied.
 /// Only runs when the `adjustments_dirty` flag is set, to avoid per-frame work.
 pub fn rebuild_adjusted_textures(app: &mut ImageApp, _ctx: &egui::Context) {
@@ -676,7 +718,7 @@ pub fn rebuild_adjusted_textures(app: &mut ImageApp, _ctx: &egui::Context) {
 
     // Re-apply all adjustments to the stored original pixels and re-upload textures
     for (i, original) in app.state.original_pixels.iter().enumerate() {
-        let adjusted = if app.state.show_original_while_held {
+        let base = if app.state.show_original_while_held {
             original.clone()
         } else if app.state.adjustments.has_adjustments() {
             app.state.adjustments.apply_all(original)
@@ -684,8 +726,15 @@ pub fn rebuild_adjusted_textures(app: &mut ImageApp, _ctx: &egui::Context) {
             original.clone()
         };
 
+        let (adjusted, draw_width, draw_height) = apply_rotation_quarter_turns(
+            base,
+            width,
+            height,
+            app.state.rotation_quarter_turns,
+        );
+
         let color_image = egui::ColorImage::from_rgba_unmultiplied(
-            [width as usize, height as usize],
+            [draw_width as usize, draw_height as usize],
             &adjusted,
         );
 

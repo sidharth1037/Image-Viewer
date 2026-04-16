@@ -67,6 +67,7 @@ pub struct ViewerState {
     pub adjustments: AdjustmentPipeline,
     pub original_pixels: Vec<Vec<u8>>,  // Original decoded pixels per frame (untouched by adjustments)
     pub adjustments_dirty: bool,        // True when textures need rebuilding after an adjustment change
+    pub rotation_quarter_turns: u8,
     pub overlay_last_changed: Option<f64>,
     pub overlay_text: Option<String>,
     pub show_original_while_held: bool,
@@ -118,6 +119,7 @@ impl ViewerState {
             adjustments: AdjustmentPipeline::default(),
             original_pixels: Vec::new(),
             adjustments_dirty: false,
+            rotation_quarter_turns: 0,
             overlay_last_changed: None,
             overlay_text: None,
             show_original_while_held: false,
