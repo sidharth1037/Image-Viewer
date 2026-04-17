@@ -2,6 +2,38 @@ use eframe::egui;
 use crate::app::ImageApp;
 use std::sync::atomic::Ordering;
 
+#[cfg(windows)]
+#[link(name = "ole32")]
+unsafe extern "system" {
+    fn CoInitializeEx(pv_reserved: *mut core::ffi::c_void, coinit: u32) -> i32;
+    fn CoUninitialize();
+    fn CoTaskMemFree(pv: *const core::ffi::c_void);
+}
+
+#[cfg(windows)]
+#[link(name = "shell32")]
+unsafe extern "system" {
+    fn SHParseDisplayName(
+        psz_name: *const u16,
+        pbc: *mut core::ffi::c_void,
+        ppidl: *mut *mut core::ffi::c_void,
+        sfgao_in: u32,
+        psfgao_out: *mut u32,
+    ) -> i32;
+
+    fn SHOpenFolderAndSelectItems(
+        pidl_folder: *const core::ffi::c_void,
+        cidl: u32,
+        apidl: *const *const core::ffi::c_void,
+        dw_flags: u32,
+    ) -> i32;
+}
+
+#[cfg(windows)]
+const COINIT_APARTMENTTHREADED: u32 = 0x2;
+#[cfg(windows)]
+const RPC_E_CHANGED_MODE: i32 = 0x80010106u32 as i32;
+
 fn next_scan_request_id(app: &ImageApp) -> u64 {
     app.state.scan_id.fetch_add(1, Ordering::AcqRel) + 1
 }
@@ -406,6 +438,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.sort_descending.is_pressed(i),
             shortcuts.toggle_settings.is_pressed(i),
             shortcuts.toggle_search.is_pressed(i),
+            shortcuts.reveal_in_explorer.is_pressed(i),
             shortcuts.rotate_clockwise.is_pressed(i),
             shortcuts.close_window.is_pressed(i),
             shortcuts.saturation_decrease.pressed_step_multiplier(i),
@@ -438,6 +471,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         sort_descending,
         toggle_settings,
         toggle_search,
+        reveal_in_explorer,
         rotate_clockwise,
         close_window,
         saturation_down,
@@ -521,6 +555,10 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     if toggle_search {
         toggle_filter_popup(app);
         set_overlay_message(app, time, "Shortcut: Toggle filter popup");
+    }
+
+    if reveal_in_explorer {
+        reveal_current_in_explorer(app, time);
     }
 
     if rotate_clockwise {
@@ -669,6 +707,94 @@ fn show_adjustment_overlay(
 fn set_overlay_message(app: &mut ImageApp, time: f64, text: &str) {
     app.state.overlay_last_changed = Some(time);
     app.state.overlay_text = Some(text.to_string());
+}
+
+#[cfg(windows)]
+fn reveal_in_explorer_windows(path: &std::path::Path) -> Result<(), ()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    let wide_path: Vec<u16> = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+
+    unsafe {
+        let hr_init = CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED);
+        let should_uninitialize = hr_init >= 0;
+        let com_ready = hr_init >= 0 || hr_init == RPC_E_CHANGED_MODE;
+        if !com_ready {
+            return Err(());
+        }
+
+        let mut pidl: *mut core::ffi::c_void = std::ptr::null_mut();
+        let hr_parse = SHParseDisplayName(
+            wide_path.as_ptr(),
+            std::ptr::null_mut(),
+            &mut pidl,
+            0,
+            std::ptr::null_mut(),
+        );
+
+        if hr_parse < 0 || pidl.is_null() {
+            if should_uninitialize {
+                CoUninitialize();
+            }
+            return Err(());
+        }
+
+        // cidl=0 with a fully qualified item PIDL opens parent folder and selects that item.
+        let hr_open = SHOpenFolderAndSelectItems(
+            pidl,
+            0,
+            std::ptr::null(),
+            0,
+        );
+
+        CoTaskMemFree(pidl);
+
+        if should_uninitialize {
+            CoUninitialize();
+        }
+
+        if hr_open >= 0 {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+}
+
+fn reveal_current_in_explorer(app: &mut ImageApp, time: f64) {
+    let Some(path) = app.state.current_file_path.as_ref() else {
+        set_overlay_message(app, time, "Shortcut: No file to reveal");
+        return;
+    };
+
+    #[cfg(windows)]
+    {
+        let absolute_path = if path.is_absolute() {
+            path.clone()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.clone())
+        };
+
+        let launched = reveal_in_explorer_windows(&absolute_path).is_ok();
+
+        if launched {
+            set_overlay_message(app, time, "Shortcut: Reveal in Explorer");
+        } else {
+            set_overlay_message(app, time, "Shortcut: Failed to open Explorer");
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        set_overlay_message(app, time, "Shortcut: Reveal is only available on Windows");
+    }
 }
 
 fn rotate_rgba_90_cw(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
