@@ -164,11 +164,20 @@ fn set_cursor_to_end(ctx: &egui::Context, text_id: egui::Id, char_count: usize) 
 }
 
 fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
-    let has_loaded_image = !app.state.frames.is_empty() && app.state.load_error.is_none();
-    if !has_loaded_image {
+    let has_target = app.state.current_file_path.is_some() || !app.state.active_playlist.is_empty();
+    if !has_target {
         // Keep geometry stable without consuming the full unconstrained overlay height.
         ui.allocate_space(egui::vec2(ui.available_width(), BOTTOM_BAR_HEIGHT));
         return;
+    }
+
+    let has_loaded_image = !app.state.frames.is_empty() && app.state.load_error.is_none();
+
+    // Keep index interaction available even for unsupported/error files.
+    // Scale editing depends on an active decoded image, so close it when unavailable.
+    if !has_loaded_image {
+        app.bottom_bar_scale_editing = false;
+        app.bottom_bar_scale_focus_pending = false;
     }
 
     let size_text = app
@@ -261,36 +270,43 @@ fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
             }
 
-            if app.bottom_bar_scale_editing {
-                app.bottom_bar_scale_input.retain(|c| c.is_ascii_digit());
-                let desired_w = 76.0;
-                let text_id = egui::Id::new(SCALE_INPUT_ID);
-                let text_resp = ui.add_sized(
-                    [desired_w, ui.spacing().interact_size.y],
-                    egui::TextEdit::singleline(&mut app.bottom_bar_scale_input)
-                        .id_source(text_id)
-                        .hint_text(format!("{:.0}-{:.0}", min_percent, max_percent)),
-                );
-                scale_input_rect = Some(text_resp.rect);
+            if has_loaded_image {
+                if app.bottom_bar_scale_editing {
+                    app.bottom_bar_scale_input.retain(|c| c.is_ascii_digit());
+                    let desired_w = 76.0;
+                    let text_id = egui::Id::new(SCALE_INPUT_ID);
+                    let text_resp = ui.add_sized(
+                        [desired_w, ui.spacing().interact_size.y],
+                        egui::TextEdit::singleline(&mut app.bottom_bar_scale_input)
+                            .id_source(text_id)
+                            .hint_text(format!("{:.0}-{:.0}", min_percent, max_percent)),
+                    );
+                    scale_input_rect = Some(text_resp.rect);
 
-                if app.bottom_bar_scale_focus_pending {
-                    text_resp.request_focus();
-                    set_cursor_to_end(ctx, text_id, app.bottom_bar_scale_input.chars().count());
-                    app.bottom_bar_scale_focus_pending = false;
-                }
+                    if app.bottom_bar_scale_focus_pending {
+                        text_resp.request_focus();
+                        set_cursor_to_end(ctx, text_id, app.bottom_bar_scale_input.chars().count());
+                        app.bottom_bar_scale_focus_pending = false;
+                    }
 
-                if text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    commit_scale_input(app, ctx);
+                    if text_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        commit_scale_input(app, ctx);
+                    }
+                } else {
+                    let scale_resp = text_like_button(ui, &scale_text);
+                    if scale_resp.clicked() {
+                        app.bottom_bar_scale_editing = true;
+                        app.bottom_bar_index_editing = false;
+                        app.bottom_bar_scale_input = format!("{:.0}", scale_percent.round());
+                        app.bottom_bar_scale_focus_pending = true;
+                        app.bottom_bar_index_focus_pending = false;
+                        app.bottom_bar_edit_just_opened = true;
+                    }
                 }
             } else {
-                let scale_resp = text_like_button(ui, &scale_text);
-                if scale_resp.clicked() {
-                    app.bottom_bar_scale_editing = true;
-                    app.bottom_bar_index_editing = false;
-                    app.bottom_bar_scale_input = format!("{:.0}", scale_percent.round());
-                    app.bottom_bar_scale_focus_pending = true;
-                    app.bottom_bar_index_focus_pending = false;
-                    app.bottom_bar_edit_just_opened = true;
+                let unavailable_scale = ui.label("--");
+                if unavailable_scale.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
                 }
             }
         });
