@@ -439,6 +439,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.toggle_settings.is_pressed(i),
             shortcuts.toggle_search.is_pressed(i),
             shortcuts.reveal_in_explorer.is_pressed(i),
+            shortcuts.overwrite_with_adjustments.is_pressed(i),
             shortcuts.rotate_clockwise.is_pressed(i),
             shortcuts.close_window.is_pressed(i),
             shortcuts.saturation_decrease.pressed_step_multiplier(i),
@@ -472,6 +473,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         toggle_settings,
         toggle_search,
         reveal_in_explorer,
+        overwrite_with_adjustments,
         rotate_clockwise,
         close_window,
         saturation_down,
@@ -506,6 +508,9 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         if toggle_search {
             toggle_filter_popup(app);
             set_overlay_message(app, time, "Shortcut: Toggle filter popup");
+        }
+        if overwrite_with_adjustments {
+            overwrite_current_file_with_adjustments(app, time);
         }
         return;
     }
@@ -559,6 +564,10 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
 
     if reveal_in_explorer {
         reveal_current_in_explorer(app, time);
+    }
+
+    if overwrite_with_adjustments {
+        overwrite_current_file_with_adjustments(app, time);
     }
 
     if rotate_clockwise {
@@ -920,4 +929,89 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
             }
         }
     });
+}
+
+fn has_overwritable_adjustment_changes(app: &ImageApp) -> bool {
+    app.state.adjustments.has_adjustments() || app.state.rotation_quarter_turns != 0
+}
+
+fn infer_writable_image_format(path: &std::path::Path) -> Option<image::ImageFormat> {
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "png" => Some(image::ImageFormat::Png),
+        "jpg" | "jpeg" => Some(image::ImageFormat::Jpeg),
+        "webp" => Some(image::ImageFormat::WebP),
+        "bmp" => Some(image::ImageFormat::Bmp),
+        "tif" | "tiff" => Some(image::ImageFormat::Tiff),
+        "tga" => Some(image::ImageFormat::Tga),
+        _ => None,
+    }
+}
+
+fn write_adjusted_current_frame(path: &std::path::Path, app: &ImageApp) -> Result<(), String> {
+    let (base_width, base_height) = app
+        .state
+        .image_resolution
+        .ok_or_else(|| "No decoded image loaded".to_string())?;
+
+    if app.state.original_pixels.len() != 1 {
+        return Err("Overwrite currently supports static images only".to_string());
+    }
+
+    let format = infer_writable_image_format(path)
+        .ok_or_else(|| "Unsupported target file format for overwrite".to_string())?;
+
+    let mut pixels = app.state.original_pixels[0].clone();
+    if app.state.adjustments.has_adjustments() {
+        pixels = app.state.adjustments.apply_all(&pixels);
+    }
+
+    let (pixels, width, height) = apply_rotation_quarter_turns(
+        pixels,
+        base_width,
+        base_height,
+        app.state.rotation_quarter_turns,
+    );
+
+    let expected_len = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(4);
+    if pixels.len() != expected_len {
+        return Err("Adjusted pixel buffer size mismatch".to_string());
+    }
+
+    let rgba = image::RgbaImage::from_raw(width, height, pixels)
+        .ok_or_else(|| "Failed to construct output image buffer".to_string())?;
+    let out = image::DynamicImage::ImageRgba8(rgba);
+    out.save_with_format(path, format)
+        .map_err(|e| format!("Failed to overwrite file: {}", e))
+}
+
+fn overwrite_current_file_with_adjustments(app: &mut ImageApp, time: f64) {
+    let Some(path) = app.state.current_file_path.clone() else {
+        set_overlay_message(app, time, "Shortcut: No file to save");
+        return;
+    };
+
+    if !has_overwritable_adjustment_changes(app) {
+        set_overlay_message(app, time, "Shortcut: No adjustments to save");
+        return;
+    }
+
+    if app.state.original_pixels.is_empty() || app.state.image_resolution.is_none() {
+        set_overlay_message(app, time, "Shortcut: Image is not ready to save");
+        return;
+    }
+
+    match write_adjusted_current_frame(&path, app) {
+        Ok(()) => {
+            // Force fresh bytes from disk and re-sync playlist order/metadata after overwrite.
+            open_target(app, path);
+            set_overlay_message(app, time, "Shortcut: Saved current file");
+        }
+        Err(error) => {
+            let text = format!("Shortcut: Save failed ({})", error);
+            set_overlay_message(app, time, &text);
+        }
+    }
 }
