@@ -18,6 +18,7 @@ dependencies = [
  "serde",
  "serde_json",
  "webp",
+ "windows 0.61.3",
  "windows-sys 0.52.0",
  "zune-jpeg",
  "zune-png",

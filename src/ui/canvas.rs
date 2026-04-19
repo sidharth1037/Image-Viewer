@@ -174,6 +174,20 @@ pub fn render(
     }
 
     let is_zoomed_in = state.scale > default_display_scale * 1.0001;
+    let image_fits_canvas = !state.frames.is_empty()
+        && (image_size.x * state.scale) <= canvas_size.x + 0.5
+        && (image_size.y * state.scale) <= canvas_size.y + 0.5;
+
+    #[cfg(windows)]
+    if response.drag_started_by(egui::PointerButton::Primary)
+        && image_fits_canvas
+        && !in_nav_zone
+        && state.reset_start_time.is_none()
+    {
+        if let Some(path) = state.current_file_path.as_ref() {
+            let _ = crate::platform::windows_drag_out::begin_file_drag(path.as_path());
+        }
+    }
 
     // Re-engage auto_fit once the user manually returns to the default baseline.
     if !state.frames.is_empty() && !state.auto_fit && state.reset_start_time.is_none() {

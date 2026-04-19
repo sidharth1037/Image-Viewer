@@ -910,6 +910,23 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
     ctx.input(|i| {
         if let Some(dropped_file) = i.raw.dropped_files.first() {
             if let Some(path) = &dropped_file.path {
+                let same_target = app
+                    .state
+                    .current_file_path
+                    .as_ref()
+                    .is_some_and(|current| current == path);
+
+                let same_directory = path
+                    .parent()
+                    .and_then(|parent| app.state.current_folder.as_ref().map(|folder| folder.as_path() == parent))
+                    .unwrap_or(false);
+
+                // Ignore self-drops of the currently loaded file to avoid unnecessary reloads
+                // that reset zoom/pan state and trigger a full refresh pipeline.
+                if same_target && same_directory {
+                    return;
+                }
+
                 app.state.preload.on_new_open();
                 let mut should_scan = false;
                 

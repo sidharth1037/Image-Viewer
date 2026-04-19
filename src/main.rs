@@ -15,6 +15,8 @@ mod ui;
 mod handlers;
 #[cfg(windows)]
 mod win32;
+#[cfg(windows)]
+mod platform;
 
 use app::ImageApp;
 
