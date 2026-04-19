@@ -440,6 +440,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.toggle_search.is_pressed(i),
             shortcuts.reveal_in_explorer.is_pressed(i),
             shortcuts.overwrite_with_adjustments.is_pressed(i),
+            shortcuts.reload_current_context.is_pressed(i),
             shortcuts.rotate_clockwise.is_pressed(i),
             shortcuts.close_window.is_pressed(i),
             shortcuts.saturation_decrease.pressed_step_multiplier(i),
@@ -474,6 +475,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         toggle_search,
         reveal_in_explorer,
         overwrite_with_adjustments,
+        reload_current_context,
         rotate_clockwise,
         close_window,
         saturation_down,
@@ -511,6 +513,9 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         }
         if overwrite_with_adjustments {
             overwrite_current_file_with_adjustments(app, time);
+        }
+        if reload_current_context {
+            reload_current_context_like_overwrite(app, time);
         }
         return;
     }
@@ -568,6 +573,10 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
 
     if overwrite_with_adjustments {
         overwrite_current_file_with_adjustments(app, time);
+    }
+
+    if reload_current_context {
+        reload_current_context_like_overwrite(app, time);
     }
 
     if rotate_clockwise {
@@ -1006,7 +1015,7 @@ fn overwrite_current_file_with_adjustments(app: &mut ImageApp, time: f64) {
     match write_adjusted_current_frame(&path, app) {
         Ok(()) => {
             // Force fresh bytes from disk and re-sync playlist order/metadata after overwrite.
-            open_target(app, path);
+            reload_path_like_overwrite(app, path);
             set_overlay_message(app, time, "Shortcut: Saved current file");
         }
         Err(error) => {
@@ -1014,4 +1023,18 @@ fn overwrite_current_file_with_adjustments(app: &mut ImageApp, time: f64) {
             set_overlay_message(app, time, &text);
         }
     }
+}
+
+fn reload_path_like_overwrite(app: &mut ImageApp, path: std::path::PathBuf) {
+    open_target(app, path);
+}
+
+fn reload_current_context_like_overwrite(app: &mut ImageApp, time: f64) {
+    let Some(path) = app.state.current_file_path.clone() else {
+        set_overlay_message(app, time, "Shortcut: No file to reload");
+        return;
+    };
+
+    reload_path_like_overwrite(app, path);
+    set_overlay_message(app, time, "Shortcut: Reloaded current file and playlist");
 }
