@@ -10,6 +10,7 @@ pub struct AppSettings {
     pub loop_playlist: bool,
     pub fit_all_images_to_window: bool,
     pub pixel_based_1_to_1: bool,
+    pub directory_sort_preferences: std::collections::HashMap<String, crate::persistence::PersistedDirectorySortPreference>,
     pub shortcuts: crate::shortcuts::ShortcutConfig,
 }
 impl Default for AppSettings {
@@ -19,6 +20,7 @@ impl Default for AppSettings {
             loop_playlist: false,
             fit_all_images_to_window: true,
             pixel_based_1_to_1: false,
+            directory_sort_preferences: std::collections::HashMap::new(),
             shortcuts: crate::shortcuts::ShortcutConfig::default(),
         }
     }
@@ -91,6 +93,7 @@ impl ImageApp {
         settings.loop_playlist = persisted_state.loop_playlist;
         settings.fit_all_images_to_window = persisted_state.fit_all_images_to_window;
         settings.pixel_based_1_to_1 = persisted_state.pixel_based_1_to_1;
+        settings.directory_sort_preferences = persisted_state.directory_sort_preferences;
         let prev_pixel_based_1_to_1 = settings.pixel_based_1_to_1;
 
         let app = Self {
@@ -217,6 +220,7 @@ impl eframe::App for ImageApp {
             loop_playlist: self.settings.loop_playlist,
             fit_all_images_to_window: self.settings.fit_all_images_to_window,
             pixel_based_1_to_1: self.settings.pixel_based_1_to_1,
+            directory_sort_preferences: self.settings.directory_sort_preferences.clone(),
         };
         let _ = crate::persistence::save_persisted_state(&current_state);
     }

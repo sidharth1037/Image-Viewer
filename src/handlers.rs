@@ -38,7 +38,54 @@ fn next_scan_request_id(app: &ImageApp) -> u64 {
     app.state.scan_id.fetch_add(1, Ordering::AcqRel) + 1
 }
 
+fn persist_sort_preference_for_directory(app: &mut ImageApp, directory: &std::path::Path) {
+    let key = crate::persistence::directory_key(directory);
+    let default_method = crate::scanner::SortMethod::Natural;
+    let default_order = crate::scanner::default_order_for(default_method);
+    let is_default = app.state.sort_method == default_method && app.state.sort_order == default_order;
+
+    if is_default {
+        app.settings.directory_sort_preferences.remove(&key);
+        return;
+    }
+
+    app.settings.directory_sort_preferences.insert(
+        key,
+        crate::persistence::PersistedDirectorySortPreference {
+            sort_method: app.state.sort_method,
+            sort_order: app.state.sort_order,
+        },
+    );
+}
+
+fn apply_sort_preference_for_directory(app: &mut ImageApp, directory: &std::path::Path) {
+    let key = crate::persistence::directory_key(directory);
+    let default_method = crate::scanner::SortMethod::Natural;
+    let default_order = crate::scanner::default_order_for(default_method);
+
+    if let Some(pref) = app.settings.directory_sort_preferences.get(&key) {
+        app.state.sort_method = pref.sort_method;
+        app.state.sort_order = pref.sort_order;
+    } else {
+        app.state.sort_method = default_method;
+        app.state.sort_order = default_order;
+    }
+}
+
 pub fn request_directory_scan(app: &mut ImageApp, target_path: std::path::PathBuf) {
+    if let Some(target_dir) = target_path.parent() {
+        if app
+            .state
+            .current_folder
+            .as_ref()
+            .is_some_and(|current| current.as_path() == target_dir)
+        {
+            persist_sort_preference_for_directory(app, target_dir);
+        } else {
+            apply_sort_preference_for_directory(app, target_dir);
+        }
+    }
+
     let request_id = next_scan_request_id(app);
     let _ = app.state.dir_req_tx.send(crate::scanner::ScanRequest {
         target_path,

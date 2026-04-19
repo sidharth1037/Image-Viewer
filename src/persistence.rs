@@ -1,12 +1,22 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PersistedDirectorySortPreference {
+    pub sort_method: crate::scanner::SortMethod,
+    pub sort_order: crate::scanner::SortOrder,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PersistedAppState {
     pub immersive_maximized: bool,
     pub loop_playlist: bool,
     pub fit_all_images_to_window: bool,
     pub pixel_based_1_to_1: bool,
+    #[serde(default)]
+    pub directory_sort_preferences: HashMap<String, PersistedDirectorySortPreference>,
 }
 
 impl Default for PersistedAppState {
@@ -16,7 +26,27 @@ impl Default for PersistedAppState {
             loop_playlist: false,
             fit_all_images_to_window: true,
             pixel_based_1_to_1: false,
+            directory_sort_preferences: HashMap::new(),
         }
+    }
+}
+
+pub fn directory_key(path: &Path) -> String {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .unwrap_or_else(|_| path.to_path_buf())
+    };
+
+    let normalized = std::fs::canonicalize(&absolute).unwrap_or(absolute);
+    let as_string = normalized.to_string_lossy().into_owned();
+
+    if cfg!(windows) {
+        as_string.to_ascii_lowercase()
+    } else {
+        as_string
     }
 }
 
