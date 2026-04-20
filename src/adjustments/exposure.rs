@@ -6,6 +6,7 @@
 
 use super::scalar;
 
+#[derive(Clone)]
 pub struct ExposureAdjustment {
     pub value: f32,
 }

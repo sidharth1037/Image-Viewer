@@ -105,6 +105,11 @@ pub fn reset_view_for_mode_change(
     }
 }
 
+/// Height of the blue focus indicator strip in split view.
+const FOCUS_INDICATOR_HEIGHT: f32 = 3.0;
+/// Height of the immersive topbar overlay (including margins/strokes)
+const IMMERSIVE_TOPBAR_HEIGHT: f32 = 36.0;
+
 pub fn render(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
@@ -112,8 +117,28 @@ pub fn render(
     loop_playlist: bool,
     fit_all_images_to_window: bool,
     pixel_based_1_to_1: bool,
+    is_active: bool,
+    is_split: bool,
+    immersive_topbar_visible: bool,
 ) -> Option<i32> {
     let mut nav_action = None;
+
+    // In split view, allocate a focus indicator strip before the canvas.
+    // This pushes the canvas content down so the indicator never overlaps the image.
+    let show_focus_indicator = is_split && is_active;
+    let mut indicator_x_range = None;
+
+    if is_split {
+        let strip_size = egui::vec2(ui.available_width(), FOCUS_INDICATOR_HEIGHT);
+        let (strip_rect, _) = ui.allocate_exact_size(strip_size, egui::Sense::hover());
+
+        if show_focus_indicator && !immersive_topbar_visible {
+            let line_color = egui::Color32::from_rgb(0, 122, 204);
+            ui.painter().rect_filled(strip_rect, 0.0, line_color);
+        }
+
+        indicator_x_range = Some(strip_rect.x_range());
+    }
 
     // Allocate a persistent interaction area for the entire canvas.
     // This ensures inputs are captured consistently even during image transitions.
@@ -121,6 +146,21 @@ pub fn render(
     state.last_canvas_size = canvas_size;
     let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::click_and_drag());
     painter.rect_filled(response.rect, 0.0, ui.visuals().window_fill());
+
+    // When immersive topbar is visible, draw the focus indicator at the topbar's bottom
+    // edge using a foreground painter so it stays visible above the floating overlay.
+    if show_focus_indicator && immersive_topbar_visible {
+        if let Some(x_range) = indicator_x_range {
+            let line_color = egui::Color32::from_rgb(0, 122, 204);
+            let line_stroke = egui::Stroke::new(FOCUS_INDICATOR_HEIGHT, line_color);
+            let y = IMMERSIVE_TOPBAR_HEIGHT + FOCUS_INDICATOR_HEIGHT * 0.5;
+            ctx.layer_painter(egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("split_focus_indicator"),
+            ))
+            .hline(x_range, y, line_stroke);
+        }
+    }
 
     let mut fit_scale = 1.0;
     let mut min_zoom_scale = 1.0;
@@ -209,7 +249,10 @@ pub fn render(
     // Double clicks in these zones will navigate twice rather than triggering zoom.
     if state.reset_start_time.is_none() {
         if response.clicked() || response.double_clicked() {
-            if in_left_zone && has_prev {
+            if !is_active {
+                // Just absorb the click to assign focus. Return Some(0) which navigate() handles.
+                nav_action = Some(0);
+            } else if in_left_zone && has_prev {
                 nav_action = Some(-1);
             } else if in_right_zone && has_next {
                 nav_action = Some(1);
@@ -219,7 +262,7 @@ pub fn render(
 
     // Zoom Input: Handles double-click actions for fitted vs non-fitted states.
     // This is disabled in navigation zones when zoomed out to prevent accidental scale changes.
-    if response.double_clicked() && (!in_nav_zone || is_zoomed_in) && !state.frames.is_empty() {
+    if response.double_clicked() && (!in_nav_zone || is_zoomed_in) && !state.frames.is_empty() && is_active {
         state.auto_fit = false;
         let is_fitted = (state.scale - fit_scale).abs() < 0.001;
         let is_small_image = fit_scale > actual_scale;

@@ -25,6 +25,7 @@ pub enum AdjustmentTarget {
     Gamma,
 }
 
+#[derive(Clone)]
 pub struct AdjustmentPipeline {
     pub saturation: SaturationAdjustment,
     pub exposure: ExposureAdjustment,

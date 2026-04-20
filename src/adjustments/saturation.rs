@@ -5,6 +5,7 @@
 
 use super::scalar;
 
+#[derive(Clone)]
 pub struct SaturationAdjustment {
     pub value: f32,
 }

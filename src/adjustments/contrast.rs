@@ -8,6 +8,7 @@
 
 use super::scalar;
 
+#[derive(Clone)]
 pub struct ContrastAdjustment {
     pub value: f32,
 }

@@ -1,3 +1,4 @@
+pub mod split_layout;
 pub mod canvas;
 pub mod topbar;
 pub mod filter_popup;

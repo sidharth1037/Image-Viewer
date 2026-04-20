@@ -125,4 +125,30 @@ impl ViewerState {
             show_original_while_held: false,
         }
     }
+
+    pub fn clone_for_compare(&self, ctx: &eframe::egui::Context) -> Self {
+        let load_id = Arc::new(AtomicU64::new(0));
+        let preload_epoch = Arc::new(AtomicU64::new(0));
+        let scan_id = Arc::new(AtomicU64::new(0));
+        let (req_tx, res_rx) = crate::image_io::spawn_image_loader(ctx.clone(), load_id.clone());
+        let (preload_req_tx, preload_res_rx) = crate::image_io::spawn_image_loader_ordered(ctx.clone(), preload_epoch.clone());
+        let (dir_req_tx, dir_res_rx) = crate::scanner::spawn_directory_scanner(scan_id.clone()); 
+        let preload = PreloadRing::new(preload_epoch, preload_req_tx, preload_res_rx);
+
+        let mut next_state = Self::new(load_id.clone(), req_tx, res_rx, scan_id, dir_req_tx, dir_res_rx, preload);
+        next_state.current_folder = self.current_folder.clone();
+        next_state.source_playlist = self.source_playlist.clone();
+        next_state.active_playlist = self.active_playlist.clone();
+        next_state.current_index = self.current_index;
+        next_state.filter = FilterState { criteria: self.filter.criteria.clone() };
+        next_state.sort_method = self.sort_method.clone();
+        next_state.sort_order = self.sort_order.clone();
+
+        // Load the image naturally by queuing a request
+        if let Some(path) = &self.current_file_path {
+            let version = load_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let _ = next_state.req_tx.send((path.clone(), version));
+        }
+        next_state
+    }
 }

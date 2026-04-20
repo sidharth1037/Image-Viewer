@@ -185,7 +185,7 @@ fn is_bar_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
 
 pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
     // --- SETTINGS INTEGRATION ---
-    let is_immersive = app.state.is_fullscreen && app.settings.immersive_maximized;
+    let is_immersive = app.workspace.active_view().is_fullscreen && app.settings.immersive_maximized;
 
     if is_immersive {
         let mut show_bars = is_bar_visible_in_immersive(app, ctx);
@@ -199,6 +199,8 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
         {
             show_bars = true;
         }
+
+        app.immersive_topbar_visible = show_bars;
 
         if show_bars {
             egui::Area::new(egui::Id::new("top_bar_overlay"))
@@ -225,6 +227,8 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                 });
         }
     } else {
+        app.immersive_topbar_visible = false;
+
         // Standard Permanent Top Bar
         let mut current_color = if app.is_focused {
             ctx.style().visuals.strong_text_color().gamma_multiply(0.8)
@@ -232,7 +236,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             ctx.style().visuals.strong_text_color().gamma_multiply(0.4)
         };
 
-        if app.state.is_fullscreen {
+        if app.workspace.active_view().is_fullscreen {
             current_color = current_color.gamma_multiply(0.4);
         }
 
@@ -270,11 +274,13 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
         let layout = resolve_topbar_layout(ui.available_width());
         let avail_px = (ui.available_width() - layout.reserved_for_buttons).max(0.0);
 
+        let current_file_name_len = app.workspace.active_view().current_file_name.len();
+
         if (app.last_title_width - avail_px).abs() > 5.0 || app.cached_title.is_empty() {
-            let full_title = if app.state.current_file_name.is_empty() { 
+            let full_title = if current_file_name_len == 0 { 
                 "Image Viewer".to_string() 
             } else { 
-                app.state.current_file_name.clone() 
+                app.workspace.active_view().current_file_name.clone() 
             };
             
             let max_chars = (avail_px / 7.0).floor() as usize;
@@ -308,19 +314,18 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             let win_down = format!("Win+{}", icons::ARROW_DOWN);
             let controls = layout.controls;
             
-            let close_btn = egui::Button::new(icons::X);
-            let close_res = ui
-                .add(close_btn)
+            let exit_res = ui
+                .add(egui::Button::new(icons::X))
                 .on_hover_text(tooltip_with_shortcut("Close window", "Ctrl+Q"));
 
-            if close_res.hovered() {
+            if exit_res.hovered() {
                 ui.painter().rect_filled(
-                    close_res.rect, 
+                    exit_res.rect, 
                     ui.style().visuals.widgets.hovered.corner_radius, 
                     egui::Color32::from_rgb(210, 43, 43)
                 );
                 ui.painter().text(
-                    close_res.rect.center(),
+                    exit_res.rect.center(),
                     egui::Align2::CENTER_CENTER,
                     icons::X,
                     egui::FontId::proportional(14.0),
@@ -328,21 +333,22 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 );
             }
 
-            if close_res.clicked() {
+            if exit_res.clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             
-            let icon = if app.state.is_fullscreen { icons::CORNERS_IN } else { icons::CORNERS_OUT };
+            let is_fullscreen = app.workspace.active_view().is_fullscreen;
+            let icon = if is_fullscreen { icons::CORNERS_IN } else { icons::CORNERS_OUT };
             let fullscreen_res = ui
                 .button(icon)
-                .on_hover_text(if app.state.is_fullscreen {
+                .on_hover_text(if is_fullscreen {
                     tooltip_with_shortcut("Restore window", &win_down)
                 } else {
                     tooltip_with_shortcut("Maximize window", &win_up)
                 });
             if fullscreen_res.clicked() {
-                app.state.is_fullscreen = !app.state.is_fullscreen;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(app.state.is_fullscreen));
+                app.workspace.active_view_mut().is_fullscreen = !is_fullscreen;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_fullscreen));
             }
 
             let minimize_res = ui
@@ -375,7 +381,8 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // --- Sorting Dropdown ---
             let mut sort_changed = false;
             let popup_id = egui::Id::new(SORT_POPUP_ID);
-            let sort_label = sort_controls::topbar_method_label(app.state.sort_method);
+            let active_view = app.workspace.active_view();
+            let sort_label = sort_controls::topbar_method_label(active_view.sort_method);
             let mut btn_res: Option<egui::Response> = None;
             let mut order_res: Option<egui::Response> = None;
             let mut jump_last_res: Option<egui::Response> = None;
@@ -404,20 +411,21 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             // Dedicated icon-only button for switching ascending/descending.
             if controls.show_sort_order {
                 let res = ui
-                    .add(egui::Button::new(sort_controls::order_icon(app.state.sort_order)))
+                    .add(egui::Button::new(sort_controls::order_icon(app.workspace.active_view().sort_order)))
                     .on_hover_text(tooltip_with_shortcut(
-                        sort_controls::order_tooltip(app.state.sort_order),
+                        sort_controls::order_tooltip(app.workspace.active_view().sort_order),
                         "Ctrl+Up/Down",
                     ));
                 if res.clicked() {
-                    crate::handlers::set_sort_order(app, app.state.sort_order.toggled());
+                    crate::handlers::set_sort_order(app, app.workspace.active_view().sort_order.toggled());
                 }
                 order_res = Some(res);
             }
 
-            let has_playlist = !app.state.active_playlist.is_empty();
-            let can_jump_last = has_playlist && app.state.current_index + 1 < app.state.active_playlist.len();
-            let can_jump_first = has_playlist && app.state.current_index > 0;
+            let active_view = app.workspace.active_view();
+            let has_playlist = !active_view.active_playlist.is_empty();
+            let can_jump_last = has_playlist && active_view.current_index + 1 < active_view.active_playlist.len();
+            let can_jump_first = has_playlist && active_view.current_index > 0;
 
             if controls.show_jump_group {
                 let right_res = ui
@@ -438,7 +446,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
 
             if controls.show_search {
-                let filter_text_owned = app.state.filter.criteria.text.clone();
+                let filter_text_owned = app.workspace.active_view().filter.criteria.text.clone();
                 let filter_text = filter_text_owned.trim();
                 let search_label = if filter_text.is_empty() {
                     format!("{} Filter", icons::MAGNIFYING_GLASS)
@@ -497,7 +505,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             ui.set_width(210.0);
 
                             for option in sort_controls::SORT_OPTIONS {
-                                let is_selected = app.state.sort_method == option.method;
+                                let is_selected = app.workspace.active_view().sort_method == option.method;
                                 let label = sort_controls::popup_item_label(option.method);
                                 let changed = padded_left_row_button(
                                     ui,
@@ -506,8 +514,8 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                                     is_selected,
                                 );
                                 if changed {
-                                    app.state.sort_method = option.method;
-                                    app.state.sort_order = crate::scanner::default_order_for(option.method);
+                                    app.workspace.active_view_mut().sort_method = option.method;
+                                    app.workspace.active_view_mut().sort_order = crate::scanner::default_order_for(option.method);
                                     selected_sort_option = true;
                                 }
                             }

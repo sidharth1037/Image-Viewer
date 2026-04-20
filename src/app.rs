@@ -26,8 +26,10 @@ impl Default for AppSettings {
     }
 }
 
+use crate::workspace::Workspace;
+
 pub struct ImageApp {
-    pub state: ViewerState,
+    pub workspace: Workspace,
     pub settings: AppSettings,
     pub is_focused: bool,
     pub focus_settle_until: f64,
@@ -53,6 +55,7 @@ pub struct ImageApp {
     pub bottom_bar_index_focus_pending: bool,
     pub bottom_bar_edit_just_opened: bool,
     pub prev_pixel_based_1_to_1: bool,
+    pub immersive_topbar_visible: bool,
     startup_open_target: Option<std::path::PathBuf>,
 }
 
@@ -97,7 +100,7 @@ impl ImageApp {
         let prev_pixel_based_1_to_1 = settings.pixel_based_1_to_1;
 
         let app = Self {
-            state,
+            workspace: Workspace::new(state),
             settings,
             is_focused: true,
             focus_settle_until: 0.0,
@@ -119,6 +122,7 @@ impl ImageApp {
             bottom_bar_index_focus_pending: false,
             bottom_bar_edit_just_opened: false,
             prev_pixel_based_1_to_1,
+            immersive_topbar_visible: false,
             startup_open_target: initial_file.map(std::path::PathBuf::from),
         };
 
@@ -148,39 +152,34 @@ impl eframe::App for ImageApp {
         ui::settings::render(self, ctx);
 
         if self.prev_pixel_based_1_to_1 != self.settings.pixel_based_1_to_1 {
-            let canvas_size = if self.state.last_canvas_size.x > 0.0 && self.state.last_canvas_size.y > 0.0 {
-                self.state.last_canvas_size
-            } else {
-                ctx.content_rect().size()
-            };
-            crate::ui::canvas::reset_view_for_mode_change(
-                ctx,
-                &mut self.state,
-                canvas_size,
-                self.settings.fit_all_images_to_window,
-                self.settings.pixel_based_1_to_1,
-            );
+            for state in &mut self.workspace.views {
+                let canvas_size = if state.last_canvas_size.x > 0.0 && state.last_canvas_size.y > 0.0 {
+                    state.last_canvas_size
+                } else {
+                    ctx.content_rect().size()
+                };
+                crate::ui::canvas::reset_view_for_mode_change(
+                    ctx,
+                    state,
+                    canvas_size,
+                    self.settings.fit_all_images_to_window,
+                    self.settings.pixel_based_1_to_1,
+                );
+            }
             self.prev_pixel_based_1_to_1 = self.settings.pixel_based_1_to_1;
             ctx.request_repaint();
         }
 
         ui::bottom_bar::render(self, ctx);
-        ui::adjustment_overlay::render(ctx, &self.state);
+        // Note: Render overlay for active state
+        ui::adjustment_overlay::render(ctx, self.workspace.active_view());
         
         // Capture navigation actions from the canvas
         let mut nav_action = None;
         egui::CentralPanel::default()
             .frame(egui::Frame::new())
             .show(ctx, |ui| {
-                // Pass the loop setting down and get the click result
-                nav_action = ui::canvas::render(
-                    ctx,
-                    ui,
-                    &mut self.state,
-                    self.settings.loop_playlist,
-                    self.settings.fit_all_images_to_window,
-                    self.settings.pixel_based_1_to_1,
-                );
+                nav_action = crate::ui::split_layout::render(self, ctx, ui);
             });
             
         // Trigger navigation if an edge was clicked
@@ -189,7 +188,7 @@ impl eframe::App for ImageApp {
         }
             
         // 3. Custom Window Border (Only when windowed)
-        if !self.state.is_fullscreen {
+        if !self.workspace.active_view().is_fullscreen {
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("window_border")));
             
             // Get the theme's high-contrast color (White in Dark mode, Black in Light mode)

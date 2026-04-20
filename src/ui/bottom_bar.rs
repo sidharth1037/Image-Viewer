@@ -80,15 +80,16 @@ fn text_like_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
 }
 
 fn scale_bounds_percent(app: &ImageApp, ctx: &egui::Context) -> (f32, f32, f32, f32, f32) {
-    let canvas_size = if app.state.last_canvas_size.x > 0.0 && app.state.last_canvas_size.y > 0.0 {
-        app.state.last_canvas_size
+    let active_view = app.workspace.active_view();
+    let canvas_size = if active_view.last_canvas_size.x > 0.0 && active_view.last_canvas_size.y > 0.0 {
+        active_view.last_canvas_size
     } else {
         ctx.content_rect().size()
     };
 
     if let Some(metrics) = crate::ui::canvas::compute_zoom_metrics(
         ctx,
-        &app.state,
+        active_view,
         canvas_size,
         app.settings.fit_all_images_to_window,
         app.settings.pixel_based_1_to_1,
@@ -102,7 +103,7 @@ fn scale_bounds_percent(app: &ImageApp, ctx: &egui::Context) -> (f32, f32, f32, 
         )
     } else {
         (
-            app.state.scale * 100.0,
+            active_view.scale * 100.0,
             100.0,
             crate::ui::canvas::MAX_ZOOM_MULTIPLIER * 100.0,
             1.0,
@@ -125,11 +126,12 @@ fn commit_scale_input(app: &mut ImageApp, ctx: &egui::Context) {
         let new_scale = (actual_scale * (clamped_percent / 100.0))
             .clamp(min_zoom_scale, max_zoom_scale);
 
-        app.state.auto_fit = false;
-        app.state.scale = new_scale;
-        app.state.target_scale = None;
-        app.state.target_pan = None;
-        app.state.reset_start_time = None;
+        let active_view = app.workspace.active_view_mut();
+        active_view.auto_fit = false;
+        active_view.scale = new_scale;
+        active_view.target_scale = None;
+        active_view.target_pan = None;
+        active_view.reset_start_time = None;
     }
 
     app.bottom_bar_scale_editing = false;
@@ -144,8 +146,9 @@ fn commit_index_input(app: &mut ImageApp) {
     }
 
     if let Ok(index_one_based) = input.parse::<usize>() {
-        if !app.state.active_playlist.is_empty() {
-            let clamped = index_one_based.clamp(1, app.state.active_playlist.len());
+        let max_len = app.workspace.active_view().active_playlist.len();
+        if max_len > 0 {
+            let clamped = index_one_based.clamp(1, max_len);
             crate::handlers::jump_to_index(app, clamped);
         }
     }
@@ -164,14 +167,14 @@ fn set_cursor_to_end(ctx: &egui::Context, text_id: egui::Id, char_count: usize) 
 }
 
 fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
-    let has_target = app.state.current_file_path.is_some() || !app.state.active_playlist.is_empty();
-    if !has_target {
+    let active_view_has_target = app.workspace.active_view().current_file_path.is_some() || !app.workspace.active_view().active_playlist.is_empty();
+    if !active_view_has_target {
         // Keep geometry stable without consuming the full unconstrained overlay height.
         ui.allocate_space(egui::vec2(ui.available_width(), BOTTOM_BAR_HEIGHT));
         return;
     }
 
-    let has_loaded_image = !app.state.frames.is_empty() && app.state.load_error.is_none();
+    let has_loaded_image = !app.workspace.active_view().frames.is_empty() && app.workspace.active_view().load_error.is_none();
 
     // Keep index interaction available even for unsupported/error files.
     // Scale editing depends on an active decoded image, so close it when unavailable.
@@ -181,13 +184,13 @@ fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
     }
 
     let size_text = app
-        .state
+        .workspace.active_view()
         .current_file_size_bytes
         .map(format_file_size)
         .unwrap_or_else(|| "--".to_string());
 
     let resolution_text = app
-        .state
+        .workspace.active_view()
         .image_resolution
         .map(|(w, h)| format!("{}x{}", w, h))
         .unwrap_or_else(|| "--".to_string());
@@ -196,10 +199,10 @@ fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
         scale_bounds_percent(app, ctx);
     let scale_text = format!("{:.0}%", scale_percent);
 
-    let (index, total) = if app.state.active_playlist.is_empty() {
+    let (index, total) = if app.workspace.active_view().active_playlist.is_empty() {
         (1, 1)
     } else {
-        (app.state.current_index + 1, app.state.active_playlist.len())
+        (app.workspace.active_view().current_index + 1, app.workspace.active_view().active_playlist.len())
     };
 
     let mut scale_input_rect = None;
@@ -334,7 +337,8 @@ fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
 }
 
 pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
-    let is_immersive = app.state.is_fullscreen && app.settings.immersive_maximized;
+    let active_view = app.workspace.active_view();
+    let is_immersive = active_view.is_fullscreen && app.settings.immersive_maximized;
     let is_editing = app.bottom_bar_scale_editing || app.bottom_bar_index_editing;
 
     if is_immersive {
@@ -372,7 +376,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             ctx.style().visuals.strong_text_color().gamma_multiply(0.4)
         };
 
-        if app.state.is_fullscreen {
+        if app.workspace.active_view().is_fullscreen {
             current_color = current_color.gamma_multiply(0.4);
         }
 

@@ -6,6 +6,7 @@
 
 use super::scalar;
 
+#[derive(Clone)]
 pub struct GammaAdjustment {
     pub value: f32,
 }

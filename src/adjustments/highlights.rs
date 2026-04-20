@@ -5,6 +5,7 @@
 
 use super::scalar;
 
+#[derive(Clone)]
 pub struct HighlightsAdjustment {
     pub value: f32,
 }

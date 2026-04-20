@@ -27,7 +27,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new("Filter").strong());
                     ui.add_space(6.0);
 
-                    let mut filter_text = app.state.filter.criteria.text.clone();
+                    let mut filter_text = app.workspace.active_view().filter.criteria.text.clone();
                     let text_id = egui::Id::new(FILTER_TEXT_ID);
                     let text_res = ui.add_sized(
                         [ui.available_width(), ui.spacing().interact_size.y],
@@ -43,7 +43,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                         app.filter_popup_focus_pending = false;
                     }
 
-                    if filter_text != app.state.filter.criteria.text {
+                    if filter_text != app.workspace.active_view().filter.criteria.text {
                         crate::handlers::set_text_filter(app, filter_text);
                     }
 

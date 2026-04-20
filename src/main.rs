@@ -13,6 +13,7 @@ mod shortcuts;
 mod persistence;
 mod ui;
 mod handlers;
+mod workspace;
 #[cfg(windows)]
 mod win32;
 #[cfg(windows)]
