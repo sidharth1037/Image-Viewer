@@ -203,9 +203,15 @@ pub fn render(
     let left_zone_bound = response.rect.min.x + canvas_size.x * 0.08;
     let right_zone_bound = response.rect.max.x - canvas_size.x * 0.08;
     let pointer_in_canvas = response.contains_pointer();
+    let pointer_in_immersive_topbar_overlay = immersive_topbar_visible
+        && pointer_pos.is_some_and(|p| p.y <= IMMERSIVE_TOPBAR_HEIGHT);
 
-    let in_left_zone = pointer_in_canvas && pointer_pos.map_or(false, |p| p.x < left_zone_bound);
-    let in_right_zone = pointer_in_canvas && pointer_pos.map_or(false, |p| p.x > right_zone_bound);
+    let in_left_zone = pointer_in_canvas
+        && !pointer_in_immersive_topbar_overlay
+        && pointer_pos.map_or(false, |p| p.x < left_zone_bound);
+    let in_right_zone = pointer_in_canvas
+        && !pointer_in_immersive_topbar_overlay
+        && pointer_pos.map_or(false, |p| p.x > right_zone_bound);
     let in_nav_zone = in_left_zone || in_right_zone;
 
     // Keep edge affordance consistent: always show hand cursor in navigation zones.

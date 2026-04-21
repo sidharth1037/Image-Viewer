@@ -158,6 +158,12 @@ fn tooltip_with_shortcut(label: &str, shortcut: &str) -> String {
     format!("{} [{}]", label, shortcut)
 }
 
+fn toggle_maximize_state(app: &mut ImageApp, ctx: &egui::Context) {
+    let is_fullscreen = app.workspace.active_view().is_fullscreen;
+    app.workspace.active_view_mut().is_fullscreen = !is_fullscreen;
+    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_fullscreen));
+}
+
 fn is_bar_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
     if ctx.input(|i| i.time) < app.focus_settle_until {
         return false;
@@ -216,7 +222,9 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                         ui.max_rect(),
                         egui::Id::new("top_bar_input_shield"),
                         egui::Sense::click_and_drag(),
-                    );
+                    )
+                    .on_hover_cursor(egui::CursorIcon::Default)
+                    .on_hover_and_drag_cursor(egui::CursorIcon::Default);
 
                     let active_stroke = egui::Stroke::new(1.0, ui.visuals().strong_text_color().gamma_multiply(0.8));
                     
@@ -263,10 +271,15 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
 }
 
 fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
-    let drag_response = ui.interact(ui.max_rect(), egui::Id::new("title_drag"), egui::Sense::drag());
+    let drag_response = ui
+        .interact(ui.max_rect(), egui::Id::new("title_drag"), egui::Sense::drag())
+        .on_hover_cursor(egui::CursorIcon::Default)
+        .on_hover_and_drag_cursor(egui::CursorIcon::Default);
     if drag_response.drag_started() {
         ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
     }
+
+    let mut interactive_rects: Vec<egui::Rect> = Vec::new();
 
     ui.horizontal_centered(|ui| {
         ui.add_space(8.0);
@@ -317,6 +330,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             let exit_res = ui
                 .add(egui::Button::new(icons::X))
                 .on_hover_text(tooltip_with_shortcut("Close window", "Ctrl+Q"));
+            interactive_rects.push(exit_res.rect);
 
             if exit_res.hovered() {
                 ui.painter().rect_filled(
@@ -346,14 +360,15 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 } else {
                     tooltip_with_shortcut("Maximize window", &win_up)
                 });
+            interactive_rects.push(fullscreen_res.rect);
             if fullscreen_res.clicked() {
-                app.workspace.active_view_mut().is_fullscreen = !is_fullscreen;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(!is_fullscreen));
+                toggle_maximize_state(app, ctx);
             }
 
             let minimize_res = ui
                 .button(icons::MINUS)
                 .on_hover_text(tooltip_with_shortcut("Minimize window", &win_down));
+            interactive_rects.push(minimize_res.rect);
             if minimize_res.clicked() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)); 
             }
@@ -364,11 +379,11 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
 
             if controls.show_settings {
                 let settings_btn = egui::Button::new(icons::GEAR_SIX).selected(app.show_settings_window);
-                if ui
+                let settings_res = ui
                     .add(settings_btn)
-                    .on_hover_text(tooltip_with_shortcut("Settings", "Ctrl+,"))
-                    .clicked()
-                {
+                    .on_hover_text(tooltip_with_shortcut("Settings", "Ctrl+,"));
+                interactive_rects.push(settings_res.rect);
+                if settings_res.clicked() {
                     crate::handlers::toggle_settings_window(app);
                 }
             }
@@ -393,6 +408,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 let res = ui
                     .button(sort_label)
                     .on_hover_text(tooltip_with_shortcut("Choose sorting type", "Ctrl+Left/Right"));
+                interactive_rects.push(res.rect);
                 if res.clicked() {
                     if app.show_sort_menu {
                         app.show_sort_menu = false;
@@ -416,6 +432,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                         sort_controls::order_tooltip(app.workspace.active_view().sort_order),
                         "Ctrl+Up/Down",
                     ));
+                interactive_rects.push(res.rect);
                 if res.clicked() {
                     crate::handlers::set_sort_order(app, app.workspace.active_view().sort_order.toggled());
                 }
@@ -431,6 +448,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 let right_res = ui
                     .add_enabled(can_jump_last, egui::Button::new(icons::ARROW_LINE_RIGHT))
                     .on_hover_text(tooltip_with_shortcut("Jump to last item", "Ctrl+Shift+J"));
+                interactive_rects.push(right_res.rect);
                 if right_res.clicked() {
                     crate::handlers::jump_to_playlist_edge(app, true);
                 }
@@ -439,6 +457,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                 let left_res = ui
                     .add_enabled(can_jump_first, egui::Button::new(icons::ARROW_LINE_LEFT))
                     .on_hover_text(tooltip_with_shortcut("Jump to first item", "Ctrl+J"));
+                interactive_rects.push(left_res.rect);
                 if left_res.clicked() {
                     crate::handlers::jump_to_playlist_edge(app, false);
                 }
@@ -460,20 +479,20 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                     spacing.x = 0.0;
 
                     if !filter_text.is_empty() {
-                        if ui
+                        let clear_res = ui
                             .button(icons::X)
-                            .on_hover_text("Clear filter")
-                            .clicked()
-                        {
+                            .on_hover_text("Clear filter");
+                        interactive_rects.push(clear_res.rect);
+                        if clear_res.clicked() {
                             crate::handlers::set_text_filter(app, String::new());
                         }
                     }
 
-                    if ui
+                    let search_res = ui
                         .add(egui::Button::new(search_label))
-                        .on_hover_text(tooltip_with_shortcut("Filter playlist", "Ctrl+F"))
-                        .clicked()
-                    {
+                        .on_hover_text(tooltip_with_shortcut("Filter playlist", "Ctrl+F"));
+                    interactive_rects.push(search_res.rect);
+                    if search_res.clicked() {
                         crate::handlers::toggle_filter_popup(app);
                     }
 
@@ -552,4 +571,17 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
             }
         });
     });
+
+    let title_bar_double_clicked =
+        ctx.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary));
+    if title_bar_double_clicked {
+        let clicked_empty_title_area = ctx.pointer_interact_pos().is_some_and(|pos| {
+            drag_response.rect.contains(pos)
+                && !interactive_rects.iter().any(|rect| rect.contains(pos))
+        });
+
+        if clicked_empty_title_area {
+            toggle_maximize_state(app, ctx);
+        }
+    }
 }
