@@ -221,7 +221,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                     let _overlay_input = ui.interact(
                         ui.max_rect(),
                         egui::Id::new("top_bar_input_shield"),
-                        egui::Sense::click_and_drag(),
+                        egui::Sense::click(),
                     )
                     .on_hover_cursor(egui::CursorIcon::Default)
                     .on_hover_and_drag_cursor(egui::CursorIcon::Default);
@@ -272,7 +272,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
 
 fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     let drag_response = ui
-        .interact(ui.max_rect(), egui::Id::new("title_drag"), egui::Sense::drag())
+        .interact(ui.max_rect(), egui::Id::new("title_drag"), egui::Sense::click_and_drag())
         .on_hover_cursor(egui::CursorIcon::Default)
         .on_hover_and_drag_cursor(egui::CursorIcon::Default);
     if drag_response.drag_started() {
