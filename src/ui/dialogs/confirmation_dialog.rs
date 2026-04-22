@@ -22,7 +22,6 @@ pub enum ConfirmationDialogAction {
 }
 
 const DIALOG_WIDTH: f32 = 460.0;
-const BUTTON_WIDTH: f32 = 140.0;
 const BUTTON_HEIGHT: f32 = 34.0;
 
 pub fn render(
@@ -54,27 +53,32 @@ pub fn render(
 
     // Use the same active border/text color as the main window when focused.
     let active_color = ctx.style().visuals.strong_text_color().gamma_multiply(0.8);
+    let active_stroke = egui::Stroke::new(1.0, active_color);
     let dialog_frame = egui::Frame::window(&ctx.style())
-        .stroke(egui::Stroke::new(1.0, active_color));
+        .stroke(active_stroke);
 
     window
         .frame(dialog_frame)
         .show(ctx, |ui| {
-            // Override text color to match the focused window's active text.
+            // Override the title bar and body text to use the active color.
             ui.visuals_mut().override_text_color = Some(active_color);
+            ui.visuals_mut().widgets.noninteractive.fg_stroke = active_stroke;
             ui.set_min_width(DIALOG_WIDTH);
 
             ui.add(egui::Label::new(spec.message).wrap());
             ui.add_space(14.0);
 
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 10.0;
+                let spacing = 10.0;
+                ui.spacing_mut().item_spacing.x = spacing;
+                let button_width = (ui.available_width() - spacing) / 2.0;
 
                 let cancel_clicked = render_action_button(
                     ui,
                     spec.cancel_label,
                     selected == ConfirmationSelection::Cancel,
                     false,
+                    button_width,
                 )
                 .clicked();
 
@@ -83,6 +87,7 @@ pub fn render(
                     spec.confirm_label,
                     selected == ConfirmationSelection::Confirm,
                     true,
+                    button_width,
                 )
                 .clicked();
 
@@ -115,8 +120,9 @@ fn render_action_button(
     label: &str,
     selected: bool,
     destructive: bool,
+    width: f32,
 ) -> egui::Response {
-    let mut button = egui::Button::new(label).min_size(egui::vec2(BUTTON_WIDTH, BUTTON_HEIGHT));
+    let mut button = egui::Button::new(label).min_size(egui::vec2(width, BUTTON_HEIGHT));
 
     if selected && destructive {
         button = button
