@@ -1,7 +1,12 @@
 use eframe::egui;
 use crate::app::ImageApp;
 
-pub fn render(app: &mut ImageApp, ctx: &egui::Context, pass_through_ui: &mut egui::Ui) -> Option<i32> {
+pub fn render(
+    app: &mut ImageApp,
+    ctx: &egui::Context,
+    pass_through_ui: &mut egui::Ui,
+    allow_interaction: bool,
+) -> Option<i32> {
     let is_split = app.workspace.is_split();
     let immersive_topbar_visible = app.immersive_topbar_visible;
 
@@ -23,6 +28,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context, pass_through_ui: &mut egu
                 active_index == 1,
                 true,
                 immersive_topbar_visible,
+                allow_interaction,
             );
 
             // Right (original side) = index 0
@@ -36,6 +42,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context, pass_through_ui: &mut egu
                 active_index == 0,
                 true,
                 immersive_topbar_visible,
+                allow_interaction,
             );
         });
 
@@ -74,6 +81,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context, pass_through_ui: &mut egu
             true, // Only one view, so it's always active
             false,
             false,
+            allow_interaction,
         )
     }
-}
+}

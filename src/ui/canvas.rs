@@ -120,6 +120,7 @@ pub fn render(
     is_active: bool,
     is_split: bool,
     immersive_topbar_visible: bool,
+    allow_interaction: bool,
 ) -> Option<i32> {
     let mut nav_action = None;
 
@@ -144,7 +145,12 @@ pub fn render(
     // This ensures inputs are captured consistently even during image transitions.
     let canvas_size = ui.available_size();
     state.last_canvas_size = canvas_size;
-    let (response, painter) = ui.allocate_painter(canvas_size, egui::Sense::click_and_drag());
+    let canvas_sense = if allow_interaction {
+        egui::Sense::click_and_drag()
+    } else {
+        egui::Sense::hover()
+    };
+    let (response, painter) = ui.allocate_painter(canvas_size, canvas_sense);
     painter.rect_filled(response.rect, 0.0, ui.visuals().window_fill());
 
     // When immersive topbar is visible, draw the focus indicator at the topbar's bottom
@@ -199,7 +205,11 @@ pub fn render(
 
     // Only track pointer while the canvas interaction region actually owns it.
     // This prevents overlay UI (top/bottom bars) from leaking clicks into navigation.
-    let pointer_pos = response.interact_pointer_pos().or(response.hover_pos());
+    let pointer_pos = if allow_interaction {
+        response.interact_pointer_pos().or(response.hover_pos())
+    } else {
+        response.hover_pos()
+    };
     let left_zone_bound = response.rect.min.x + canvas_size.x * 0.08;
     let right_zone_bound = response.rect.max.x - canvas_size.x * 0.08;
     let pointer_in_canvas = response.contains_pointer();
@@ -215,7 +225,7 @@ pub fn render(
     let in_nav_zone = in_left_zone || in_right_zone;
 
     // Keep edge affordance consistent: always show hand cursor in navigation zones.
-    if in_nav_zone {
+    if allow_interaction && in_nav_zone {
         ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 
@@ -225,7 +235,8 @@ pub fn render(
         && (image_size.y * state.scale) <= canvas_size.y + 0.5;
 
     #[cfg(windows)]
-    if response.drag_started_by(egui::PointerButton::Primary)
+    if allow_interaction
+        && response.drag_started_by(egui::PointerButton::Primary)
         && image_fits_canvas
         && !in_nav_zone
         && state.reset_start_time.is_none()
@@ -253,7 +264,7 @@ pub fn render(
 
     // Navigation Input: Handles clicks and double-clicks within the 8% edge zones.
     // Double clicks in these zones will navigate twice rather than triggering zoom.
-    if state.reset_start_time.is_none() {
+    if allow_interaction && state.reset_start_time.is_none() {
         if response.clicked() || response.double_clicked() {
             if !is_active {
                 // Just absorb the click to assign focus. Return Some(0) which navigate() handles.
@@ -268,7 +279,12 @@ pub fn render(
 
     // Zoom Input: Handles double-click actions for fitted vs non-fitted states.
     // This is disabled in navigation zones when zoomed out to prevent accidental scale changes.
-    if response.double_clicked() && (!in_nav_zone || is_zoomed_in) && !state.frames.is_empty() && is_active {
+    if allow_interaction
+        && response.double_clicked()
+        && (!in_nav_zone || is_zoomed_in)
+        && !state.frames.is_empty()
+        && is_active
+    {
         state.auto_fit = false;
         let is_fitted = (state.scale - fit_scale).abs() < 0.001;
         let is_small_image = fit_scale > actual_scale;
@@ -312,7 +328,7 @@ pub fn render(
         let current_time = ctx.input(|i| i.time);
 
         // Manual Zoom/Pan logic.
-        if state.reset_start_time.is_none() {
+        if allow_interaction && state.reset_start_time.is_none() {
             if response.hovered() {
                 let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
                 if scroll != 0.0 {
@@ -431,7 +447,11 @@ pub fn render(
 
     // Persistent Arrow Overlays
     // Rendered completely outside image-loading logic to prevent flashing.
-    if playlist_len > 1 && state.reset_start_time.is_none() && !state.current_file_name.is_empty() {
+    if allow_interaction
+        && playlist_len > 1
+        && state.reset_start_time.is_none()
+        && !state.current_file_name.is_empty()
+    {
         if pointer_pos.is_some() {
             let center_y = response.rect.center().y;
 

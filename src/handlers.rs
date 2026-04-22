@@ -1,5 +1,6 @@
 use eframe::egui;
 use crate::app::ImageApp;
+use crate::ui::dialogs::confirmation_dialog::ConfirmationSelection;
 use std::sync::atomic::Ordering;
 
 #[cfg(windows)]
@@ -138,6 +139,113 @@ pub fn toggle_filter_popup(app: &mut ImageApp) {
     } else {
         open_filter_popup(app);
     }
+}
+
+pub fn open_delete_file_dialog(app: &mut ImageApp, time: f64) {
+    let Some(path) = app.workspace.active_view().current_file_path.clone() else {
+        set_overlay_message(app, time, "Shortcut: No file to delete");
+        return;
+    };
+
+    close_filter_popup(app);
+    app.show_sort_menu = false;
+    app.sort_menu_pos = None;
+
+    app.show_delete_file_dialog = true;
+    app.delete_file_dialog_target = Some(path);
+    app.delete_file_dialog_selection = ConfirmationSelection::Confirm;
+}
+
+pub fn cancel_delete_file_dialog(app: &mut ImageApp) {
+    app.show_delete_file_dialog = false;
+    app.delete_file_dialog_target = None;
+    app.delete_file_dialog_selection = ConfirmationSelection::Confirm;
+}
+
+pub fn confirm_delete_file_dialog(app: &mut ImageApp, time: f64) {
+    let requested_path = app.delete_file_dialog_target.clone();
+    let outcome = crate::file_ops::delete_current::delete_file_permanently(app, requested_path);
+    cancel_delete_file_dialog(app);
+
+    match outcome {
+        crate::file_ops::delete_current::DeleteCurrentFileOutcome::Deleted { deleted_path } => {
+            let name = deleted_path
+                .file_name()
+                .map(|value| value.to_string_lossy().into_owned())
+                .unwrap_or_else(|| deleted_path.to_string_lossy().into_owned());
+            let text = format!("Shortcut: Deleted {}", name);
+            set_overlay_message(app, time, &text);
+        }
+        crate::file_ops::delete_current::DeleteCurrentFileOutcome::NoFileToDelete => {
+            set_overlay_message(app, time, "Shortcut: No file to delete");
+        }
+        crate::file_ops::delete_current::DeleteCurrentFileOutcome::Failed { message } => {
+            let text = format!("Shortcut: Delete failed ({})", message);
+            set_overlay_message(app, time, &text);
+        }
+    }
+}
+
+fn handle_delete_file_dialog_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
+    let input = ctx.input(|i| {
+        (
+            i.time,
+            i.key_pressed(egui::Key::ArrowLeft),
+            i.key_pressed(egui::Key::ArrowRight),
+            i.key_pressed(egui::Key::ArrowUp),
+            i.key_pressed(egui::Key::ArrowDown),
+            i.key_pressed(egui::Key::Enter),
+            i.key_pressed(egui::Key::Escape),
+        )
+    });
+
+    let (time, arrow_left, arrow_right, arrow_up, arrow_down, enter, escape) = input;
+
+    if arrow_left || arrow_up {
+        app.delete_file_dialog_selection = ConfirmationSelection::Cancel;
+    }
+
+    if arrow_right || arrow_down {
+        app.delete_file_dialog_selection = ConfirmationSelection::Confirm;
+    }
+
+    if escape {
+        cancel_delete_file_dialog(app);
+        return;
+    }
+
+    if enter {
+        match app.delete_file_dialog_selection {
+            ConfirmationSelection::Cancel => cancel_delete_file_dialog(app),
+            ConfirmationSelection::Confirm => confirm_delete_file_dialog(app, time),
+        }
+    }
+}
+
+fn delete_file_shortcut_pressed(
+    input: &egui::InputState,
+    shortcut: crate::shortcuts::Shortcut,
+) -> bool {
+    if shortcut.is_pressed(input) {
+        return true;
+    }
+
+    #[cfg(windows)]
+    {
+        // egui-winit maps Shift+Delete to Event::Cut on Windows, so a Key::Delete
+        // press may never reach InputState::key_pressed(Key::Delete).
+        let modifiers = input.modifiers;
+        let looks_like_shift_delete = modifiers.shift
+            && !modifiers.alt
+            && !modifiers.ctrl
+            && !modifiers.command;
+
+        if looks_like_shift_delete && input.events.iter().any(|event| matches!(event, egui::Event::Cut)) {
+            return true;
+        }
+    }
+
+    false
 }
 
 pub fn set_text_filter(app: &mut ImageApp, text: String) {
@@ -491,6 +599,11 @@ pub fn jump_to_index(app: &mut ImageApp, one_based_index: usize) {
 }
 
 pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
+    if app.show_delete_file_dialog {
+        handle_delete_file_dialog_keyboard(app, ctx);
+        return;
+    }
+
     let shortcuts = app.settings.shortcuts;
     let input = ctx.input(|i| {
         (
@@ -507,6 +620,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.toggle_settings.is_pressed(i),
             shortcuts.toggle_search.is_pressed(i),
             shortcuts.reveal_in_explorer.is_pressed(i),
+            delete_file_shortcut_pressed(i, shortcuts.delete_current_file_permanently),
             shortcuts.overwrite_with_adjustments.is_pressed(i),
             shortcuts.reload_current_context.is_pressed(i),
             shortcuts.rotate_clockwise.is_pressed(i),
@@ -542,6 +656,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         toggle_settings,
         toggle_search,
         reveal_in_explorer,
+        delete_current_file_permanently,
         overwrite_with_adjustments,
         reload_current_context,
         rotate_clockwise,
@@ -590,6 +705,9 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         if toggle_search {
             toggle_filter_popup(app);
             set_overlay_message(app, time, "Shortcut: Toggle filter popup");
+        }
+        if delete_current_file_permanently {
+            open_delete_file_dialog(app, time);
         }
         if overwrite_with_adjustments {
             overwrite_current_file_with_adjustments(app, time);
@@ -645,6 +763,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     if toggle_search {
         toggle_filter_popup(app);
         set_overlay_message(app, time, "Shortcut: Toggle filter popup");
+    }
+
+    if delete_current_file_permanently {
+        open_delete_file_dialog(app, time);
+        return;
     }
 
     if reveal_in_explorer {
@@ -999,6 +1122,10 @@ pub fn process_directory_scanning(app: &mut ImageApp) {
 }
 
 pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
+    if app.show_delete_file_dialog {
+        return;
+    }
+
     ctx.input(|i| {
         if let Some(dropped_file) = i.raw.dropped_files.first() {
             if let Some(path) = &dropped_file.path {

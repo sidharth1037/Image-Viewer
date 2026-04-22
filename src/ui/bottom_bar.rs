@@ -2,6 +2,7 @@ use crate::app::ImageApp;
 use eframe::egui;
 
 const BOTTOM_BAR_HEIGHT: f32 = 28.0;
+pub const IMMERSIVE_BOTTOM_BAR_OVERLAY_HEIGHT: f32 = BOTTOM_BAR_HEIGHT;
 const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
 const SCALE_INPUT_ID: &str = "bottom_bar_scale_input";
 const INDEX_INPUT_ID: &str = "bottom_bar_index_input";
@@ -343,7 +344,13 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
 
     if is_immersive {
         let show_bars =
-            is_editing || app.show_sort_menu || app.show_filter_popup || is_bottom_visible_in_immersive(app, ctx);
+            is_editing
+                || app.show_sort_menu
+                || app.show_filter_popup
+                || app.show_delete_file_dialog
+                || app.show_settings_window
+                || is_bottom_visible_in_immersive(app, ctx);
+        app.immersive_bottombar_visible = show_bars;
         if show_bars {
             egui::Area::new(egui::Id::new("bottom_bar_overlay"))
                 .fixed_pos(egui::pos2(0.0, ctx.content_rect().max.y - BOTTOM_BAR_HEIGHT))
@@ -370,6 +377,8 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                 });
         }
     } else {
+        app.immersive_bottombar_visible = false;
+
         let mut current_color = if app.is_focused {
             ctx.style().visuals.strong_text_color().gamma_multiply(0.8)
         } else {

@@ -5,6 +5,7 @@ use egui_phosphor::regular as icons;
 
 const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
 const TOPBAR_HEIGHT: f32 = 22.0;
+pub const IMMERSIVE_TOPBAR_OVERLAY_HEIGHT: f32 = TOPBAR_HEIGHT;
 const SORT_POPUP_ID: &str = "sort_hover_menu";
 const TOPBAR_FIXED_RESERVED_WIDTH: f32 = 120.0;
 const TOPBAR_MIN_TITLE_WIDTH_BEFORE_HIDING: f32 = 150.0;
@@ -202,6 +203,8 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             || app.show_filter_popup
             || app.bottom_bar_scale_editing
             || app.bottom_bar_index_editing
+            || app.show_delete_file_dialog
+            || app.show_settings_window
         {
             show_bars = true;
         }

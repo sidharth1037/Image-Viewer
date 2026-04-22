@@ -47,6 +47,9 @@ pub struct ImageApp {
     pub show_filter_popup: bool,
     pub filter_popup_focus_pending: bool,
     pub filter_popup_just_opened: bool,
+    pub show_delete_file_dialog: bool,
+    pub delete_file_dialog_target: Option<std::path::PathBuf>,
+    pub delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection,
     pub bottom_bar_scale_editing: bool,
     pub bottom_bar_scale_input: String,
     pub bottom_bar_scale_focus_pending: bool,
@@ -56,6 +59,7 @@ pub struct ImageApp {
     pub bottom_bar_edit_just_opened: bool,
     pub prev_pixel_based_1_to_1: bool,
     pub immersive_topbar_visible: bool,
+    pub immersive_bottombar_visible: bool,
     startup_open_target: Option<std::path::PathBuf>,
 }
 
@@ -114,6 +118,9 @@ impl ImageApp {
             show_filter_popup: false,
             filter_popup_focus_pending: false,
             filter_popup_just_opened: false,
+            show_delete_file_dialog: false,
+            delete_file_dialog_target: None,
+            delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection::Confirm,
             bottom_bar_scale_editing: false,
             bottom_bar_scale_input: String::new(),
             bottom_bar_scale_focus_pending: false,
@@ -123,6 +130,7 @@ impl ImageApp {
             bottom_bar_edit_just_opened: false,
             prev_pixel_based_1_to_1,
             immersive_topbar_visible: false,
+            immersive_bottombar_visible: false,
             startup_open_target: initial_file.map(std::path::PathBuf::from),
         };
 
@@ -175,16 +183,46 @@ impl eframe::App for ImageApp {
         ui::adjustment_overlay::render(ctx, self.workspace.active_view());
         
         // Capture navigation actions from the canvas
-        let mut nav_action = None;
-        egui::CentralPanel::default()
+        let panel_output = egui::CentralPanel::default()
             .frame(egui::Frame::new())
             .show(ctx, |ui| {
-                nav_action = crate::ui::split_layout::render(self, ctx, ui);
+                crate::ui::split_layout::render(self, ctx, ui, !self.show_delete_file_dialog)
             });
+
+        let nav_action = panel_output.inner;
+        let mut dialog_backdrop_rect = panel_output.response.rect;
+
+        let is_immersive = self.workspace.active_view().is_fullscreen && self.settings.immersive_maximized;
+        if is_immersive {
+            if self.immersive_topbar_visible {
+                dialog_backdrop_rect.min.y += crate::ui::topbar::IMMERSIVE_TOPBAR_OVERLAY_HEIGHT;
+            }
+            if self.immersive_bottombar_visible {
+                dialog_backdrop_rect.max.y -= crate::ui::bottom_bar::IMMERSIVE_BOTTOM_BAR_OVERLAY_HEIGHT;
+            }
+            if dialog_backdrop_rect.max.y < dialog_backdrop_rect.min.y {
+                dialog_backdrop_rect.max.y = dialog_backdrop_rect.min.y;
+            }
+        }
             
         // Trigger navigation if an edge was clicked
-        if let Some(direction) = nav_action {
-            handlers::navigate(self, direction);
+        if !self.show_delete_file_dialog {
+            if let Some(direction) = nav_action {
+                handlers::navigate(self, direction);
+            }
+        }
+
+        if let Some(action) = ui::dialogs::delete_file_dialog::render(self, ctx, dialog_backdrop_rect) {
+            let time = ctx.input(|i| i.time);
+            match action {
+                ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Cancel => {
+                    handlers::cancel_delete_file_dialog(self);
+                }
+                ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Confirm => {
+                    handlers::confirm_delete_file_dialog(self, time);
+                }
+            }
+            ctx.request_repaint();
         }
             
         // 3. Custom Window Border (Only when windowed)
