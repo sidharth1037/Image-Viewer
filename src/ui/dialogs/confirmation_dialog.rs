@@ -30,19 +30,38 @@ pub fn render(
     spec: &ConfirmationDialogSpec<'_>,
     selected: ConfirmationSelection,
     backdrop_rect: egui::Rect,
+    dialog_center: Option<egui::Pos2>,
 ) -> Option<ConfirmationDialogAction> {
     paint_modal_backdrop(ctx, spec.id_source, backdrop_rect);
 
     let mut action = None;
 
-    egui::Window::new(spec.title)
+    let mut window = egui::Window::new(spec.title)
         .id(egui::Id::new((spec.id_source, "window")))
         .order(egui::Order::Foreground)
-        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .collapsible(false)
         .resizable(false)
-        .movable(false)
+        .movable(false);
+
+    window = if let Some(center) = dialog_center {
+        window.fixed_pos(egui::pos2(
+            center.x - DIALOG_WIDTH * 0.5,
+            center.y - 60.0,
+        ))
+    } else {
+        window.anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+    };
+
+    // Use the same active border/text color as the main window when focused.
+    let active_color = ctx.style().visuals.strong_text_color().gamma_multiply(0.8);
+    let dialog_frame = egui::Frame::window(&ctx.style())
+        .stroke(egui::Stroke::new(1.0, active_color));
+
+    window
+        .frame(dialog_frame)
         .show(ctx, |ui| {
+            // Override text color to match the focused window's active text.
+            ui.visuals_mut().override_text_color = Some(active_color);
             ui.set_min_width(DIALOG_WIDTH);
 
             ui.add(egui::Label::new(spec.message).wrap());
@@ -85,7 +104,7 @@ fn paint_modal_backdrop(ctx: &egui::Context, id_source: &str, backdrop_rect: egu
     }
 
     let painter = ctx.layer_painter(egui::LayerId::new(
-        egui::Order::Foreground,
+        egui::Order::Middle,
         egui::Id::new((id_source, "backdrop_painter")),
     ));
     painter.rect_filled(backdrop_rect, 0.0, egui::Color32::from_black_alpha(145));

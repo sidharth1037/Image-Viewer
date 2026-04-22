@@ -189,13 +189,19 @@ impl eframe::App for ImageApp {
                 crate::ui::split_layout::render(self, ctx, ui, !self.show_delete_file_dialog)
             });
 
-        let nav_action = panel_output.inner;
-        let mut dialog_backdrop_rect = panel_output.response.rect;
+        let result = panel_output.inner;
+        let nav_action = result.nav_action;
+
+        // Use the active canvas rect for the dialog backdrop (not the full panel).
+        // This ensures the dark overlay only covers the image canvas area.
+        let mut dialog_backdrop_rect = result.active_canvas_rect;
 
         let is_immersive = self.workspace.active_view().is_fullscreen && self.settings.immersive_maximized;
         if is_immersive {
             if self.immersive_topbar_visible {
-                dialog_backdrop_rect.min.y += crate::ui::topbar::IMMERSIVE_TOPBAR_OVERLAY_HEIGHT;
+                dialog_backdrop_rect.min.y = dialog_backdrop_rect.min.y.max(
+                    crate::ui::topbar::IMMERSIVE_TOPBAR_OVERLAY_HEIGHT,
+                );
             }
             if self.immersive_bottombar_visible {
                 dialog_backdrop_rect.max.y -= crate::ui::bottom_bar::IMMERSIVE_BOTTOM_BAR_OVERLAY_HEIGHT;
@@ -204,6 +210,13 @@ impl eframe::App for ImageApp {
                 dialog_backdrop_rect.max.y = dialog_backdrop_rect.min.y;
             }
         }
+
+        // In split view, center the dialog over the active canvas pane.
+        let dialog_center = if self.workspace.is_split() {
+            Some(dialog_backdrop_rect.center())
+        } else {
+            None
+        };
             
         // Trigger navigation if an edge was clicked
         if !self.show_delete_file_dialog {
@@ -212,7 +225,7 @@ impl eframe::App for ImageApp {
             }
         }
 
-        if let Some(action) = ui::dialogs::delete_file_dialog::render(self, ctx, dialog_backdrop_rect) {
+        if let Some(action) = ui::dialogs::delete_file_dialog::render(self, ctx, dialog_backdrop_rect, dialog_center) {
             let time = ctx.input(|i| i.time);
             match action {
                 ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Cancel => {

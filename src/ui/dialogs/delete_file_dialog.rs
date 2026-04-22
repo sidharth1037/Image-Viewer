@@ -14,6 +14,7 @@ pub fn render(
     app: &mut ImageApp,
     ctx: &egui::Context,
     backdrop_rect: egui::Rect,
+    dialog_center: Option<egui::Pos2>,
 ) -> Option<DeleteFileDialogAction> {
     if !app.show_delete_file_dialog {
         return None;
@@ -46,7 +47,7 @@ pub fn render(
         confirm_label: "Delete",
     };
 
-    match confirmation_dialog::render(ctx, &spec, app.delete_file_dialog_selection, backdrop_rect) {
+    match confirmation_dialog::render(ctx, &spec, app.delete_file_dialog_selection, backdrop_rect, dialog_center) {
         Some(ConfirmationDialogAction::Cancel) => Some(DeleteFileDialogAction::Cancel),
         Some(ConfirmationDialogAction::Confirm) => Some(DeleteFileDialogAction::Confirm),
         None => None,

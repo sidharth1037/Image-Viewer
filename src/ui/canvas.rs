@@ -121,7 +121,7 @@ pub fn render(
     is_split: bool,
     immersive_topbar_visible: bool,
     allow_interaction: bool,
-) -> Option<i32> {
+) -> (Option<i32>, egui::Rect) {
     let mut nav_action = None;
 
     // In split view, allocate a focus indicator strip before the canvas.
@@ -487,5 +487,5 @@ pub fn render(
         }
     }
 
-    nav_action
+    (nav_action, response.rect)
 }
