@@ -50,6 +50,7 @@ pub struct ImageApp {
     pub show_delete_file_dialog: bool,
     pub delete_file_dialog_target: Option<std::path::PathBuf>,
     pub delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection,
+    pub show_save_overwrite_dialog: bool,
     pub bottom_bar_scale_editing: bool,
     pub bottom_bar_scale_input: String,
     pub bottom_bar_scale_focus_pending: bool,
@@ -121,6 +122,7 @@ impl ImageApp {
             show_delete_file_dialog: false,
             delete_file_dialog_target: None,
             delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection::Confirm,
+            show_save_overwrite_dialog: false,
             bottom_bar_scale_editing: false,
             bottom_bar_scale_input: String::new(),
             bottom_bar_scale_focus_pending: false,
@@ -181,12 +183,14 @@ impl eframe::App for ImageApp {
         ui::bottom_bar::render(self, ctx);
         // Note: Render overlay for active state
         ui::adjustment_overlay::render(ctx, self.workspace.active_view());
+
+        let has_modal_dialog = self.show_delete_file_dialog || self.show_save_overwrite_dialog;
         
         // Capture navigation actions from the canvas
         let panel_output = egui::CentralPanel::default()
             .frame(egui::Frame::new())
             .show(ctx, |ui| {
-                crate::ui::split_layout::render(self, ctx, ui, !self.show_delete_file_dialog)
+                crate::ui::split_layout::render(self, ctx, ui, !has_modal_dialog)
             });
 
         let result = panel_output.inner;
@@ -219,7 +223,7 @@ impl eframe::App for ImageApp {
         };
             
         // Trigger navigation if an edge was clicked
-        if !self.show_delete_file_dialog {
+        if !has_modal_dialog {
             if let Some(direction) = nav_action {
                 handlers::navigate(self, direction);
             }
@@ -236,6 +240,49 @@ impl eframe::App for ImageApp {
                 }
             }
             ctx.request_repaint();
+        }
+
+        if self.show_save_overwrite_dialog {
+            let file_name = self
+                .workspace
+                .active_view()
+                .current_file_path
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "current file".to_string());
+
+            let message = format!(
+                "Overwrite this file with current adjustments?\n\n{}",
+                file_name
+            );
+
+            let spec = ui::dialogs::confirmation_dialog::ConfirmationDialogSpec {
+                id_source: "save_overwrite_confirmation_dialog",
+                title: "Save File",
+                message: &message,
+                cancel_label: "Cancel",
+                confirm_label: "Save",
+            };
+
+            if let Some(action) = ui::dialogs::confirmation_dialog::render(
+                ctx,
+                &spec,
+                ui::dialogs::confirmation_dialog::ConfirmationSelection::Confirm,
+                dialog_backdrop_rect,
+                dialog_center,
+            ) {
+                let time = ctx.input(|i| i.time);
+                match action {
+                    ui::dialogs::confirmation_dialog::ConfirmationDialogAction::Cancel => {
+                        handlers::cancel_save_overwrite_dialog(self);
+                    }
+                    ui::dialogs::confirmation_dialog::ConfirmationDialogAction::Confirm => {
+                        handlers::confirm_save_overwrite_dialog(self, time);
+                    }
+                }
+                ctx.request_repaint();
+            }
         }
             
         // 3. Custom Window Border (Only when windowed)

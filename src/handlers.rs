@@ -186,6 +186,37 @@ pub fn confirm_delete_file_dialog(app: &mut ImageApp, time: f64) {
     }
 }
 
+pub fn open_save_overwrite_dialog(app: &mut ImageApp, time: f64) {
+    if app.workspace.active_view().current_file_path.is_none() {
+        set_overlay_message(app, time, "Shortcut: No file to save");
+        return;
+    }
+
+    if !has_overwritable_adjustment_changes(app) {
+        set_overlay_message(app, time, "Shortcut: No adjustments to save");
+        return;
+    }
+
+    if app.workspace.active_view().original_pixels.is_empty() || app.workspace.active_view().image_resolution.is_none() {
+        set_overlay_message(app, time, "Shortcut: Image is not ready to save");
+        return;
+    }
+
+    close_filter_popup(app);
+    app.show_sort_menu = false;
+    app.sort_menu_pos = None;
+    app.show_save_overwrite_dialog = true;
+}
+
+pub fn cancel_save_overwrite_dialog(app: &mut ImageApp) {
+    app.show_save_overwrite_dialog = false;
+}
+
+pub fn confirm_save_overwrite_dialog(app: &mut ImageApp, time: f64) {
+    app.show_save_overwrite_dialog = false;
+    overwrite_current_file_with_adjustments(app, time);
+}
+
 fn handle_delete_file_dialog_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     let input = ctx.input(|i| {
         (
@@ -604,6 +635,10 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         return;
     }
 
+    if app.show_save_overwrite_dialog {
+        return;
+    }
+
     let shortcuts = app.settings.shortcuts;
     let input = ctx.input(|i| {
         (
@@ -710,7 +745,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             open_delete_file_dialog(app, time);
         }
         if overwrite_with_adjustments {
-            overwrite_current_file_with_adjustments(app, time);
+            open_save_overwrite_dialog(app, time);
         }
         if reload_current_context {
             reload_current_context_like_overwrite(app, time);
@@ -775,7 +810,8 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     }
 
     if overwrite_with_adjustments {
-        overwrite_current_file_with_adjustments(app, time);
+        open_save_overwrite_dialog(app, time);
+        return;
     }
 
     if reload_current_context {
