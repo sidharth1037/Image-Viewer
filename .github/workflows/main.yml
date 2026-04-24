@@ -31,6 +31,14 @@ jobs:
         run: |
           & $env:USERPROFILE\vcpkg\vcpkg.exe install libjpeg-turbo:x64-windows libpng:x64-windows libwebp:x64-windows libavif:x64-windows libheif:x64-windows
 
+      - name: Install native build tools
+        shell: pwsh
+        run: |
+          choco install meson ninja nasm -y
+          meson --version
+          ninja --version
+          nasm -v
+
       - name: Build release binaries
         shell: pwsh
         run: |
