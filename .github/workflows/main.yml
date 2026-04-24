@@ -35,6 +35,25 @@ jobs:
         shell: pwsh
         run: |
           choco install meson ninja nasm -y
+
+          $mesonDir = "${env:ProgramFiles}\Meson"
+          $nasmDir = "${env:ProgramFiles}\NASM"
+
+          if (Test-Path "$mesonDir\meson.exe") {
+            $mesonDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } else {
+            throw "meson.exe not found in $mesonDir"
+          }
+
+          if (Test-Path "$nasmDir\nasm.exe") {
+            $nasmDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          } else {
+            throw "nasm.exe not found in $nasmDir"
+          }
+
+      - name: Verify native build tools
+        shell: pwsh
+        run: |
           meson --version
           ninja --version
           nasm -v
