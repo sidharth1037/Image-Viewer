@@ -37,7 +37,21 @@ jobs:
 
       - name: Install native dependencies
         run: |
-          & $env:USERPROFILE\vcpkg\vcpkg.exe install libjpeg-turbo:x64-windows libpng:x64-windows libwebp:x64-windows libavif:x64-windows libheif:x64-windows
+          # Dynamic triplet (keeps DLL packaging behavior)
+          & $env:USERPROFILE\vcpkg\vcpkg.exe install `
+            libjpeg-turbo:x64-windows `
+            libpng:x64-windows `
+            libwebp:x64-windows `
+            libavif:x64-windows `
+            libheif:x64-windows
+
+          # Static-md triplet (needed by libheif-sys in your build)
+          & $env:USERPROFILE\vcpkg\vcpkg.exe install `
+            libjpeg-turbo:x64-windows-static-md `
+            libpng:x64-windows-static-md `
+            libwebp:x64-windows-static-md `
+            libavif:x64-windows-static-md `
+            libheif:x64-windows-static-md
 
       - name: Install native build tools
         run: |
