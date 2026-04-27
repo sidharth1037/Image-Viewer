@@ -2,6 +2,12 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+const REQUIRED_RUNTIME_DLLS: &[&str] = &[
+    "libx265.dll",
+    "heif.dll",
+    "libde265.dll",
+];
+
 fn main() {
     println!("cargo:rerun-if-env-changed=VCPKG_ROOT");
     println!("cargo:rerun-if-env-changed=CARGO_TARGET_DIR");
@@ -46,32 +52,26 @@ fn copy_vcpkg_runtime_dlls() -> Result<(), String> {
 
     let mut copied_count = 0usize;
 
-    for entry in fs::read_dir(&vcpkg_bin)
-        .map_err(|e| format!("Failed to read {}: {}", vcpkg_bin.display(), e))?
-    {
-        let entry = entry.map_err(|e| format!("Failed to read dir entry: {}", e))?;
-        let path = entry.path();
-
-        if path
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("dll"))
-        {
-            let file_name = match path.file_name() {
-                Some(name) => name,
-                None => continue,
-            };
-            let dest = out_dir.join(file_name);
-            fs::copy(&path, &dest).map_err(|e| {
-                format!(
-                    "Failed copying {} to {}: {}",
-                    path.display(),
-                    dest.display(),
-                    e
-                )
-            })?;
-            copied_count += 1;
+    for dll_name in REQUIRED_RUNTIME_DLLS {
+        let source = vcpkg_bin.join(dll_name);
+        if !source.exists() {
+            return Err(format!(
+                "Required runtime DLL not found in {}: {}",
+                vcpkg_bin.display(),
+                dll_name
+            ));
         }
+
+        let dest = out_dir.join(dll_name);
+        fs::copy(&source, &dest).map_err(|e| {
+            format!(
+                "Failed copying {} to {}: {}",
+                source.display(),
+                dest.display(),
+                e
+            )
+        })?;
+        copied_count += 1;
     }
 
     if copied_count == 0 {
