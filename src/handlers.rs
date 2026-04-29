@@ -654,6 +654,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.sort_descending.is_pressed(i),
             shortcuts.toggle_settings.is_pressed(i),
             shortcuts.toggle_search.is_pressed(i),
+            shortcuts.toggle_toolbar.is_pressed(i),
             shortcuts.reveal_in_explorer.is_pressed(i),
             delete_file_shortcut_pressed(i, shortcuts.delete_current_file_permanently),
             shortcuts.overwrite_with_adjustments.is_pressed(i),
@@ -690,6 +691,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         sort_descending,
         toggle_settings,
         toggle_search,
+        toggle_toolbar,
         reveal_in_explorer,
         delete_current_file_permanently,
         overwrite_with_adjustments,
@@ -734,6 +736,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         if show_original_hold {
             set_overlay_message(app, time, "Shortcut: Show original");
         }
+    }
+
+    if toggle_toolbar {
+        app.show_floating_toolbar = !app.show_floating_toolbar;
+        set_overlay_message(app, time, "Shortcut: Toggle toolbar");
     }
 
     if app.show_filter_popup {

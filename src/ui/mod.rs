@@ -4,6 +4,7 @@ pub mod topbar;
 pub mod filter_popup;
 pub mod settings;
 pub mod bottom_bar;
+pub mod floating_toolbar;
 pub mod adjustment_overlay;
 pub mod sort_controls;
 pub mod dialogs;

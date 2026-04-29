@@ -47,6 +47,7 @@ pub struct ImageApp {
     pub show_filter_popup: bool,
     pub filter_popup_focus_pending: bool,
     pub filter_popup_just_opened: bool,
+    pub show_floating_toolbar: bool,
     pub show_delete_file_dialog: bool,
     pub delete_file_dialog_target: Option<std::path::PathBuf>,
     pub delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection,
@@ -119,6 +120,7 @@ impl ImageApp {
             show_filter_popup: false,
             filter_popup_focus_pending: false,
             filter_popup_just_opened: false,
+            show_floating_toolbar: false,
             show_delete_file_dialog: false,
             delete_file_dialog_target: None,
             delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection::Confirm,
@@ -195,6 +197,8 @@ impl eframe::App for ImageApp {
 
         let result = panel_output.inner;
         let nav_action = result.nav_action;
+
+        ui::floating_toolbar::render(self, ctx, result.active_canvas_rect);
 
         // Use the active canvas rect for the dialog backdrop (not the full panel).
         // This ensures the dark overlay only covers the image canvas area.
