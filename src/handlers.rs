@@ -639,6 +639,10 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         return;
     }
 
+    if ctx.wants_keyboard_input() {
+        return;
+    }
+
     let shortcuts = app.settings.shortcuts;
     let input = ctx.input(|i| {
         (
