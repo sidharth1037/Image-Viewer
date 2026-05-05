@@ -1,5 +1,6 @@
 use eframe::egui;
 use crate::app::ImageApp;
+use crate::sync::pan_zoom::PanZoomSnapshot;
 
 /// Result from split_layout::render, carrying the navigation action and the
 /// screen rect of the *active* canvas pane (used for dialog backdrop positioning).
@@ -23,10 +24,16 @@ pub fn render(
         let active_index = app.workspace.active_view_index;
         let mut left_rect = egui::Rect::NOTHING;
         let mut right_rect = egui::Rect::NOTHING;
+        let can_enable_sync = crate::sync::pan_zoom::can_enable_sync(app);
+        if !app.split_pan_zoom_sync_user_disabled && !app.split_pan_zoom_sync_enabled && can_enable_sync {
+            app.split_pan_zoom_sync_enabled = true;
+        }
+        let sync_enabled = app.split_pan_zoom_sync_enabled && can_enable_sync;
 
         // Split view
         pass_through_ui.columns(2, |columns| {
             // Left (cloned side) = index 1
+            let left_pre = PanZoomSnapshot::from_state(&app.workspace.views[1]);
             let (nav, rect) = crate::ui::canvas::render(
                 ctx,
                 &mut columns[0],
@@ -41,8 +48,15 @@ pub fn render(
             );
             left_nav = nav;
             left_rect = rect;
+            let left_post = PanZoomSnapshot::from_state(&app.workspace.views[1]);
+
+            if sync_enabled && left_pre.differs_from(&left_post) {
+                let (right_slice, _) = app.workspace.views.split_at_mut(1);
+                left_post.apply_to(&mut right_slice[0]);
+            }
 
             // Right (original side) = index 0
+            let right_pre = PanZoomSnapshot::from_state(&app.workspace.views[0]);
             let (nav, rect) = crate::ui::canvas::render(
                 ctx,
                 &mut columns[1],
@@ -57,6 +71,12 @@ pub fn render(
             );
             right_nav = nav;
             right_rect = rect;
+            let right_post = PanZoomSnapshot::from_state(&app.workspace.views[0]);
+
+            if sync_enabled && right_pre.differs_from(&right_post) {
+                let (_, left_slice) = app.workspace.views.split_at_mut(1);
+                right_post.apply_to(&mut left_slice[0]);
+            }
         });
 
         // Determine active canvas rect: index 0 -> right, index 1 -> left

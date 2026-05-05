@@ -721,7 +721,15 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     let is_split_toggle = ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::C));
 
     if is_split_toggle {
+        let was_split = app.workspace.is_split();
         app.workspace.toggle_split(ctx);
+        if app.workspace.is_split() && !was_split {
+            app.split_pan_zoom_sync_enabled = crate::sync::pan_zoom::can_enable_sync(app);
+            app.split_pan_zoom_sync_user_disabled = false;
+        } else if !app.workspace.is_split() {
+            app.split_pan_zoom_sync_enabled = false;
+            app.split_pan_zoom_sync_user_disabled = false;
+        }
         let msg = if app.workspace.is_split() {
             "Split view enabled"
         } else {

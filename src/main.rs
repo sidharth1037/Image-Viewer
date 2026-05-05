@@ -14,6 +14,7 @@ mod persistence;
 mod ui;
 mod handlers;
 mod workspace;
+mod sync;
 mod file_ops;
 #[cfg(windows)]
 mod win32;
