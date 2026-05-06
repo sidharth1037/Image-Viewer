@@ -3,6 +3,23 @@ use crate::sync;
 use eframe::egui;
 use egui_phosphor::regular as icons;
 
+pub fn render_carry_adjustments_toggle(app: &mut ImageApp, ui: &mut egui::Ui) {
+    let view = app.workspace.active_view();
+    let selected = view.carry_adjustments;
+
+    let response = toolbar_button(
+        ui,
+        icons::COPY,
+        selected,
+        true,
+        "Carry adjustments to next image",
+    );
+
+    if response.clicked() {
+        app.workspace.active_view_mut().carry_adjustments = !selected;
+    }
+}
+
 pub fn render_split_pan_zoom_sync_toggle(app: &mut ImageApp, ui: &mut egui::Ui) {
     if !app.workspace.is_split() {
         return;

@@ -400,13 +400,20 @@ fn reset_view_for_new_file(app: &mut ImageApp) {
     active_view.target_scale = None;
     active_view.target_pan = None;
     active_view.reset_start_time = None;
-    active_view.adjustments.reset_all();
     active_view.original_pixels.clear();
-    active_view.adjustments_dirty = false;
     active_view.rotation_quarter_turns = 0;
     active_view.overlay_last_changed = None;
     active_view.overlay_text = None;
     active_view.show_original_while_held = false;
+
+    if active_view.carry_adjustments && active_view.adjustments.has_adjustments() {
+        // Keep the current pipeline; mark dirty so it is re-applied once the
+        // new image's pixels are available.
+        active_view.adjustments_dirty = true;
+    } else {
+        active_view.adjustments.reset_all();
+        active_view.adjustments_dirty = false;
+    }
 }
 
 fn clear_current_view_for_empty_playlist(app: &mut ImageApp, index: usize) {
@@ -1112,12 +1119,13 @@ pub fn rebuild_adjusted_textures(app: &mut ImageApp, _ctx: &egui::Context) {
     if !app.workspace.active_view_mut().adjustments_dirty {
         return;
     }
-    app.workspace.active_view_mut().adjustments_dirty = false;
 
     let (width, height) = match app.workspace.active_view_mut().image_resolution {
         Some(res) => res,
+        // Image not loaded yet; keep the dirty flag so we retry next frame.
         None => return,
     };
+    app.workspace.active_view_mut().adjustments_dirty = false;
 
     // Extract needed data from app up-front to avoid borrow-checking issues
     let show_original = app.workspace.active_view().show_original_while_held;

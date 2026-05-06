@@ -71,6 +71,7 @@ pub struct ViewerState {
     pub overlay_last_changed: Option<f64>,
     pub overlay_text: Option<String>,
     pub show_original_while_held: bool,
+    pub carry_adjustments: bool,
 }
 
 impl ViewerState {
@@ -123,6 +124,7 @@ impl ViewerState {
             overlay_last_changed: None,
             overlay_text: None,
             show_original_while_held: false,
+            carry_adjustments: false,
         }
     }
 
