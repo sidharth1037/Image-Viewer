@@ -157,6 +157,7 @@ impl eframe::App for ImageApp {
         // 1. Plumbing & Input
         handlers::sync_window_state(self, ctx);
         handlers::handle_drag_and_drop(self, ctx);
+        handlers::handle_browse_file_request(self);
         handlers::handle_keyboard(self, ctx);
         handlers::process_image_loading(self, ctx);
         handlers::process_directory_scanning(self);

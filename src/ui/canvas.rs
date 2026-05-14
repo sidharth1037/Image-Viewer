@@ -438,8 +438,36 @@ pub fn render(
                     .selectable(false),
             );
         } else if state.current_file_name.is_empty() {
-            child_ui
-                .add(egui::Label::new("No image loaded.\nDrag and drop an image here.").selectable(false));
+            let area_rect = child_ui.max_rect();
+            let mut group_ui = child_ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(area_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Center)),
+            );
+
+            // Vertically centre: push down by half the area minus half the content height estimate.
+            let content_height = 60.0; // rough: text + spacing + button
+            let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+            group_ui.add_space(top_padding);
+
+            group_ui.add(
+                egui::Label::new("No image loaded.\nDrag and drop an image here.")
+                    .selectable(false),
+            );
+            group_ui.add_space(8.0);
+
+            let button = egui::Button::new(
+                egui::RichText::new(format!(
+                    "{}  Open File",
+                    egui_phosphor::regular::FOLDER_OPEN
+                ))
+                .size(14.0),
+            )
+            .min_size(egui::vec2(120.0, 30.0));
+
+            if group_ui.add(button).clicked() {
+                state.browse_file_requested = true;
+            }
         } else {
             child_ui.spinner();
         }

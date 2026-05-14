@@ -72,6 +72,7 @@ pub struct ViewerState {
     pub overlay_text: Option<String>,
     pub show_original_while_held: bool,
     pub carry_adjustments: bool,
+    pub browse_file_requested: bool,
 }
 
 impl ViewerState {
@@ -125,6 +126,7 @@ impl ViewerState {
             overlay_text: None,
             show_original_while_held: false,
             carry_adjustments: false,
+            browse_file_requested: false,
         }
     }
 

@@ -1239,6 +1239,44 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
     });
 }
 
+pub fn handle_browse_file_request(app: &mut ImageApp) {
+    // Check all views, not just the active one, in case a split pane triggered it.
+    let mut requested_view_index = None;
+    for (i, view) in app.workspace.views.iter_mut().enumerate() {
+        if view.browse_file_requested {
+            view.browse_file_requested = false;
+            requested_view_index = Some(i);
+            break;
+        }
+    }
+
+    let Some(view_index) = requested_view_index else {
+        return;
+    };
+
+    let dialog = rfd::FileDialog::new()
+        .set_title("Open Image")
+        .add_filter(
+            "Images",
+            &[
+                "webp", "avif", "heic", "heif", "hif", "jxl", "png", "jpg",
+                "jpeg", "gif", "tif", "tiff", "bmp", "ico",
+            ],
+        )
+        .add_filter("All Files", &["*"]);
+
+    if let Some(path) = dialog.pick_file() {
+        // Ensure the correct view is active before loading.
+        let prev_active = app.workspace.active_view_index;
+        app.workspace.active_view_index = view_index;
+        open_target(app, path);
+        // Restore the original active view if it was different and we're in split mode.
+        if !app.workspace.is_split() {
+            app.workspace.active_view_index = prev_active;
+        }
+    }
+}
+
 fn has_overwritable_adjustment_changes(app: &ImageApp) -> bool {
     app.workspace.active_view().adjustments.has_adjustments() || app.workspace.active_view().rotation_quarter_turns != 0
 }
