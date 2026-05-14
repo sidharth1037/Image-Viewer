@@ -144,6 +144,7 @@ pub struct ShortcutConfig {
     pub shadows_increase: Shortcut,
     pub reset_adjustments: Shortcut,
     pub show_original_hold: Shortcut,
+    pub clear_active_view: Shortcut,
 }
 
 impl Default for ShortcutConfig {
@@ -180,6 +181,7 @@ impl Default for ShortcutConfig {
             shadows_increase: Shortcut::new(egui::Key::P, false, false, false, false),
             reset_adjustments: Shortcut::new(egui::Key::R, true, false, false, false),
             show_original_hold: Shortcut::new(egui::Key::O, true, false, false, false),
+            clear_active_view: Shortcut::new(egui::Key::Escape, false, false, true, false),
         }
     }
 }

@@ -433,6 +433,68 @@ fn clear_current_view_for_empty_playlist(app: &mut ImageApp, index: usize) {
     view.rotation_quarter_turns = 0;
 }
 
+/// Fully resets the active view to a fresh-open state, as if the app was just launched.
+/// In split view this only affects the active pane.
+pub fn clear_active_view(app: &mut ImageApp) {
+    // Close any open popups/menus that reference the current file.
+    close_filter_popup(app);
+    app.show_sort_menu = false;
+    app.sort_menu_pos = None;
+
+    let index = app.workspace.active_view_index;
+    let view = &mut app.workspace.views[index];
+
+    // Invalidate in-flight background loads so stale results are discarded.
+    let _ = view.load_id.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+
+    // Image state
+    view.current_file_path = None;
+    view.current_file_name.clear();
+    view.current_file_size_bytes = None;
+    view.frames.clear();
+    view.frame_durations.clear();
+    view.current_frame = 0;
+    view.last_frame_time = None;
+    view.image_resolution = None;
+    view.image_density = None;
+    view.load_error = None;
+
+    // Camera state
+    view.auto_fit = true;
+    view.scale = 1.0;
+    view.pan = egui::Vec2::ZERO;
+    view.target_scale = None;
+    view.target_pan = None;
+    view.reset_start_time = None;
+
+    // Playlist / folder state
+    view.current_folder = None;
+    view.source_playlist.clear();
+    view.active_playlist.clear();
+    view.current_index = 0;
+    view.filter = crate::state::FilterState::default();
+
+    // Sort state — reset to defaults
+    view.sort_method = crate::scanner::SortMethod::Natural;
+    view.sort_order = crate::scanner::default_order_for(crate::scanner::SortMethod::Natural);
+
+    // Adjustment state
+    view.original_pixels.clear();
+    view.adjustments.reset_all();
+    view.adjustments_dirty = false;
+    view.rotation_quarter_turns = 0;
+    view.carry_adjustments = false;
+    view.overlay_last_changed = None;
+    view.overlay_text = None;
+    view.show_original_while_held = false;
+
+    // Preload ring — discard all cached data
+    view.preload.on_new_open();
+
+    // Clear the title cache so the window title updates immediately.
+    app.cached_title.clear();
+}
+
 fn rebuild_active_playlist_and_reconcile_current(app: &mut ImageApp, index: usize) {
     let previous_path = app.workspace.views[index].current_file_path.clone();
     let criteria = app.workspace.views[index].filter.criteria.clone();
@@ -686,6 +748,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.shadows_increase.pressed_step_multiplier(i),
             shortcuts.reset_adjustments.is_pressed(i),
             shortcuts.show_original_hold.is_held(i),
+            shortcuts.clear_active_view.is_pressed(i),
         )
     });
 
@@ -723,6 +786,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         shadows_up,
         reset_all,
         show_original_hold,
+        clear_view,
     ) = input;
 
     let is_split_toggle = ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::C));
@@ -743,6 +807,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             "Split view disabled"
         };
         set_overlay_message(app, time, msg);
+    }
+
+    if clear_view {
+        clear_active_view(app);
+        return;
     }
 
     if app.bottom_bar_scale_editing || app.bottom_bar_index_editing {
