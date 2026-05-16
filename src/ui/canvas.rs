@@ -446,27 +446,42 @@ pub fn render(
             );
 
             // Vertically centre: push down by half the area minus half the content height estimate.
-            let content_height = 60.0; // rough: text + spacing + button
+            let content_height = 100.0; // rough: text + spacing + two buttons
             let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
             group_ui.add_space(top_padding);
 
             group_ui.add(
-                egui::Label::new("No image loaded.\nDrag and drop an image here.")
+                egui::Label::new("No image loaded.\nDrag and drop an image or folder here.")
                     .selectable(false),
             );
             group_ui.add_space(8.0);
 
-            let button = egui::Button::new(
+            let open_file_btn = egui::Button::new(
                 egui::RichText::new(format!(
                     "{}  Open File",
+                    egui_phosphor::regular::FILE_IMAGE
+                ))
+                .size(14.0),
+            )
+            .min_size(egui::vec2(120.0, 30.0));
+
+            if group_ui.add(open_file_btn).clicked() {
+                state.browse_file_requested = true;
+            }
+
+            group_ui.add_space(4.0);
+
+            let open_folder_btn = egui::Button::new(
+                egui::RichText::new(format!(
+                    "{}  Open Folder",
                     egui_phosphor::regular::FOLDER_OPEN
                 ))
                 .size(14.0),
             )
             .min_size(egui::vec2(120.0, 30.0));
 
-            if group_ui.add(button).clicked() {
-                state.browse_file_requested = true;
+            if group_ui.add(open_folder_btn).clicked() {
+                state.browse_folder_requested = true;
             }
         } else {
             child_ui.spinner();

@@ -357,6 +357,7 @@ pub fn toggle_settings_window(app: &mut ImageApp) {
 /// Queues both image loading and directory scanning through the same runtime paths.
 pub fn open_target(app: &mut ImageApp, path: std::path::PathBuf) {
     // Opening a new target starts a fresh context; no previous preload on first entry.
+    app.workspace.content_mode = crate::workspace::ContentMode::Canvas;
     app.workspace.active_view_mut().preload.on_new_open();
     load_target_file(app, path.clone());
     request_directory_scan(app, path);
@@ -749,6 +750,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.reset_adjustments.is_pressed(i),
             shortcuts.show_original_hold.is_held(i),
             shortcuts.clear_active_view.is_pressed(i),
+            shortcuts.return_to_playlist.is_pressed(i),
         )
     });
 
@@ -787,6 +789,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         reset_all,
         show_original_hold,
         clear_view,
+        return_to_playlist_pressed,
     ) = input;
 
     let is_split_toggle = ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::C));
@@ -812,6 +815,17 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     if clear_view {
         clear_active_view(app);
         return;
+    }
+
+    // Esc (no modifiers): return to playlist grid if we came from one.
+    if return_to_playlist_pressed {
+        if app.workspace.content_mode == crate::workspace::ContentMode::Canvas
+            && app.workspace.playlist_grid.is_some()
+            && app.workspace.active_view().current_folder.is_some()
+        {
+            return_to_playlist_view(app);
+            return;
+        }
     }
 
     if app.bottom_bar_scale_editing || app.bottom_bar_index_editing {
@@ -1443,5 +1457,103 @@ fn reload_current_context_like_overwrite(app: &mut ImageApp, time: f64) {
 
     reload_path_like_overwrite(app, path);
     set_overlay_message(app, time, "Shortcut: Reloaded current file and playlist");
+}
+
+// ── Playlist Grid Handlers ───────────────────────────────────────────────
+
+/// Open a folder and switch to the playlist grid view.
+pub fn open_folder(app: &mut ImageApp, ctx: &egui::Context, folder_path: std::path::PathBuf) {
+    if app.workspace.playlist_grid.is_none() {
+        app.workspace.playlist_grid = Some(crate::playlist_grid::PlaylistGridState::new(ctx));
+    }
+    if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+        grid.clear_for_new_folder();
+    }
+    app.workspace.content_mode = crate::workspace::ContentMode::PlaylistGrid;
+    let scan_target = folder_path.join("__folder_open_target__");
+    app.workspace.active_view_mut().current_folder = Some(folder_path);
+    app.workspace.active_view_mut().source_playlist.clear();
+    app.workspace.active_view_mut().active_playlist.clear();
+    app.workspace.active_view_mut().current_index = 0;
+    request_directory_scan(app, scan_target);
+    let index = app.workspace.active_view_index;
+    clear_current_view_for_empty_playlist(app, index);
+    if app.workspace.is_split() {
+        app.workspace.views.truncate(1);
+        app.workspace.active_view_index = 0;
+    }
+    app.cached_title.clear();
+}
+
+/// Handle the "Open Folder" button / browse-folder request.
+pub fn handle_browse_folder_request(app: &mut ImageApp, ctx: &egui::Context) {
+    let mut requested = false;
+    for view in app.workspace.views.iter_mut() {
+        if view.browse_folder_requested {
+            view.browse_folder_requested = false;
+            requested = true;
+            break;
+        }
+    }
+    if !requested { return; }
+    let dialog = rfd::FileDialog::new().set_title("Open Folder");
+    if let Some(folder) = dialog.pick_folder() {
+        open_folder(app, ctx, folder);
+    }
+}
+
+/// Open a specific image from the playlist grid (double-click).
+pub fn playlist_grid_open_image(app: &mut ImageApp, path: std::path::PathBuf, index: usize) {
+    app.workspace.content_mode = crate::workspace::ContentMode::Canvas;
+    app.workspace.active_view_mut().current_index = index;
+    app.workspace.active_view_mut().preload.on_new_open();
+    load_target_file(app, path.clone());
+    request_directory_scan(app, path);
+}
+
+/// Return from canvas mode to the playlist grid view.
+/// The previously viewed image stays selected and the grid scrolls to it.
+pub fn return_to_playlist_view(app: &mut ImageApp) {
+    let current_index = app.workspace.active_view().current_index;
+    let _ = app.workspace.active_view_mut().load_id.fetch_add(1, Ordering::AcqRel);
+    let view = app.workspace.active_view_mut();
+    view.frames.clear();
+    view.frame_durations.clear();
+    view.current_frame = 0;
+    view.last_frame_time = None;
+    view.image_resolution = None;
+    view.image_density = None;
+    view.load_error = None;
+    view.current_file_path = None;
+    view.current_file_name.clear();
+    view.current_file_size_bytes = None;
+    view.original_pixels.clear();
+    view.adjustments.reset_all();
+    view.adjustments_dirty = false;
+    view.rotation_quarter_turns = 0;
+    view.overlay_last_changed = None;
+    view.overlay_text = None;
+    view.show_original_while_held = false;
+    view.auto_fit = true;
+    view.scale = 1.0;
+    view.pan = egui::Vec2::ZERO;
+    view.target_scale = None;
+    view.target_pan = None;
+    view.reset_start_time = None;
+    view.preload.on_new_open();
+    app.workspace.content_mode = crate::workspace::ContentMode::PlaylistGrid;
+    if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+        grid.selection.select_single(current_index);
+        grid.scroll_to_index = Some(current_index);
+    }
+    if app.workspace.is_split() {
+        app.workspace.views.truncate(1);
+        app.workspace.active_view_index = 0;
+    }
+    close_filter_popup(app);
+    app.show_sort_menu = false;
+    app.sort_menu_pos = None;
+    app.show_floating_toolbar = false;
+    app.cached_title.clear();
 }
 

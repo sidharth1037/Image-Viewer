@@ -151,6 +151,7 @@ impl eframe::App for ImageApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if let Some(path) = self.startup_open_target.take() {
             crate::handlers::open_target(self, path);
+            self.workspace.content_mode = crate::workspace::ContentMode::Canvas;
             ctx.request_repaint();
         }
 
@@ -158,6 +159,7 @@ impl eframe::App for ImageApp {
         handlers::sync_window_state(self, ctx);
         handlers::handle_drag_and_drop(self, ctx);
         handlers::handle_browse_file_request(self);
+        handlers::handle_browse_folder_request(self, ctx);
         handlers::handle_keyboard(self, ctx);
         handlers::process_image_loading(self, ctx);
         handlers::process_directory_scanning(self);
@@ -187,69 +189,90 @@ impl eframe::App for ImageApp {
             ctx.request_repaint();
         }
 
-        ui::bottom_bar::render(self, ctx);
-        // Note: Render overlay for active state
-        ui::adjustment_overlay::render(ctx, self.workspace.active_view());
-
         let has_modal_dialog = self.show_delete_file_dialog || self.show_save_overwrite_dialog;
         
-        // Capture navigation actions from the canvas
-        let panel_output = egui::CentralPanel::default()
-            .frame(egui::Frame::new())
-            .show(ctx, |ui| {
-                crate::ui::split_layout::render(self, ctx, ui, !has_modal_dialog)
-            });
+        let is_playlist_grid = self.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
 
-        let result = panel_output.inner;
-        let nav_action = result.nav_action;
+        if is_playlist_grid {
+            // Playlist grid mode: render the thumbnail grid in the central panel.
+            let panel_output = egui::CentralPanel::default()
+                .frame(egui::Frame::new())
+                .show(ctx, |ui| {
+                    let bg = ui.visuals().window_fill();
+                    ui.painter().rect_filled(ui.max_rect(), 0.0, bg);
+                    crate::ui::playlist_grid::render(self, ctx, ui)
+                });
 
-        ui::floating_toolbar::render(self, ctx, result.active_canvas_rect);
-
-        // Use the active canvas rect for the dialog backdrop (not the full panel).
-        // This ensures the dark overlay only covers the image canvas area.
-        let mut dialog_backdrop_rect = result.active_canvas_rect;
-
-        let is_immersive = self.workspace.active_view().is_fullscreen && self.settings.immersive_maximized;
-        if is_immersive {
-            if self.immersive_topbar_visible {
-                dialog_backdrop_rect.min.y = dialog_backdrop_rect.min.y.max(
-                    crate::ui::topbar::IMMERSIVE_TOPBAR_OVERLAY_HEIGHT,
-                );
+            let grid_action = panel_output.inner;
+            match grid_action {
+                crate::ui::playlist_grid::PlaylistGridAction::OpenImage { path, index } => {
+                    handlers::playlist_grid_open_image(self, path, index);
+                }
+                crate::ui::playlist_grid::PlaylistGridAction::OpenFile => {
+                    self.workspace.views[self.workspace.active_view_index].browse_file_requested = true;
+                }
+                crate::ui::playlist_grid::PlaylistGridAction::OpenFolder => {
+                    self.workspace.views[self.workspace.active_view_index].browse_folder_requested = true;
+                }
+                crate::ui::playlist_grid::PlaylistGridAction::None => {}
             }
-            if self.immersive_bottombar_visible {
-                dialog_backdrop_rect.max.y -= crate::ui::bottom_bar::IMMERSIVE_BOTTOM_BAR_OVERLAY_HEIGHT;
-            }
-            if dialog_backdrop_rect.max.y < dialog_backdrop_rect.min.y {
-                dialog_backdrop_rect.max.y = dialog_backdrop_rect.min.y;
-            }
-        }
-
-        // In split view, center the dialog over the active canvas pane.
-        let dialog_center = if self.workspace.is_split() {
-            Some(dialog_backdrop_rect.center())
         } else {
-            None
-        };
-            
-        // Trigger navigation if an edge was clicked
-        if !has_modal_dialog {
-            if let Some(direction) = nav_action {
-                handlers::navigate(self, direction);
-            }
-        }
+            // Canvas / Empty mode: existing rendering path.
+            ui::bottom_bar::render(self, ctx);
+            ui::adjustment_overlay::render(ctx, self.workspace.active_view());
 
-        if let Some(action) = ui::dialogs::delete_file_dialog::render(self, ctx, dialog_backdrop_rect, dialog_center) {
-            let time = ctx.input(|i| i.time);
-            match action {
-                ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Cancel => {
-                    handlers::cancel_delete_file_dialog(self);
+            let panel_output = egui::CentralPanel::default()
+                .frame(egui::Frame::new())
+                .show(ctx, |ui| {
+                    crate::ui::split_layout::render(self, ctx, ui, !has_modal_dialog)
+                });
+
+            let result = panel_output.inner;
+            let nav_action = result.nav_action;
+
+            ui::floating_toolbar::render(self, ctx, result.active_canvas_rect);
+
+            let mut dialog_backdrop_rect = result.active_canvas_rect;
+
+            let is_immersive = self.workspace.active_view().is_fullscreen && self.settings.immersive_maximized;
+            if is_immersive {
+                if self.immersive_topbar_visible {
+                    dialog_backdrop_rect.min.y = dialog_backdrop_rect.min.y.max(
+                        crate::ui::topbar::IMMERSIVE_TOPBAR_OVERLAY_HEIGHT,
+                    );
                 }
-                ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Confirm => {
-                    handlers::confirm_delete_file_dialog(self, time);
+                if self.immersive_bottombar_visible {
+                    dialog_backdrop_rect.max.y -= crate::ui::bottom_bar::IMMERSIVE_BOTTOM_BAR_OVERLAY_HEIGHT;
+                }
+                if dialog_backdrop_rect.max.y < dialog_backdrop_rect.min.y {
+                    dialog_backdrop_rect.max.y = dialog_backdrop_rect.min.y;
                 }
             }
-            ctx.request_repaint();
-        }
+
+            let dialog_center = if self.workspace.is_split() {
+                Some(dialog_backdrop_rect.center())
+            } else {
+                None
+            };
+                
+            if !has_modal_dialog {
+                if let Some(direction) = nav_action {
+                    handlers::navigate(self, direction);
+                }
+            }
+
+            if let Some(action) = ui::dialogs::delete_file_dialog::render(self, ctx, dialog_backdrop_rect, dialog_center) {
+                let time = ctx.input(|i| i.time);
+                match action {
+                    ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Cancel => {
+                        handlers::cancel_delete_file_dialog(self);
+                    }
+                    ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Confirm => {
+                        handlers::confirm_delete_file_dialog(self, time);
+                    }
+                }
+                ctx.request_repaint();
+            }
 
         if self.show_save_overwrite_dialog {
             let file_name = self
@@ -292,7 +315,8 @@ impl eframe::App for ImageApp {
                 }
                 ctx.request_repaint();
             }
-        }
+            }
+        } // end else (canvas mode)
             
         // 3. Custom Window Border (Only when windowed)
         if !self.workspace.active_view().is_fullscreen {

@@ -1,8 +1,25 @@
 use crate::state::ViewerState;
+use crate::playlist_grid::PlaylistGridState;
+
+/// The current content mode of the workspace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ContentMode {
+    /// Nothing loaded — shows "Open File" / "Open Folder" buttons.
+    Empty,
+    /// Viewing a single image (or split-view pair).
+    Canvas,
+    /// Viewing folder contents as a thumbnail grid.
+    PlaylistGrid,
+    // Future: PlaylistDetails, etc.
+}
 
 pub struct Workspace {
     pub views: Vec<ViewerState>,
     pub active_view_index: usize,
+    pub content_mode: ContentMode,
+    /// Playlist grid state — kept alive when transitioning to Canvas so that
+    /// Esc can return to it.  `None` until the user first opens a folder.
+    pub playlist_grid: Option<PlaylistGridState>,
 }
 
 impl Workspace {
@@ -10,6 +27,8 @@ impl Workspace {
         Self {
             views: vec![initial_view],
             active_view_index: 0,
+            content_mode: ContentMode::Empty,
+            playlist_grid: None,
         }
     }
 

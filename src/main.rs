@@ -9,6 +9,8 @@ mod image_io;
 mod preload;
 mod scanner;
 mod playlist_view;
+mod thumbnail_provider;
+mod playlist_grid;
 mod shortcuts;
 mod persistence;
 mod ui;

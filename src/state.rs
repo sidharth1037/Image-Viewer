@@ -73,6 +73,7 @@ pub struct ViewerState {
     pub show_original_while_held: bool,
     pub carry_adjustments: bool,
     pub browse_file_requested: bool,
+    pub browse_folder_requested: bool,
 }
 
 impl ViewerState {
@@ -127,6 +128,7 @@ impl ViewerState {
             show_original_while_held: false,
             carry_adjustments: false,
             browse_file_requested: false,
+            browse_folder_requested: false,
         }
     }
 
