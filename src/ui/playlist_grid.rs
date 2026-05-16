@@ -38,13 +38,15 @@ pub fn render(
 
     let settings = &grid.settings;
     let thumb_w = settings.thumbnail_width as f32;
-    let spacing_x = settings.item_spacing_x;
+    let min_spacing_x = settings.item_spacing_x;
     let spacing_y = settings.item_spacing_y;
     let label_h = settings.label_height;
+    let padding_y = 12.0;
 
     let available_width = ui.available_width();
-    let cell_w = thumb_w + spacing_x;
-    let columns = ((available_width + spacing_x) / cell_w).floor().max(1.0) as usize;
+    let columns = ((available_width - min_spacing_x).max(0.0) / (thumb_w + min_spacing_x))
+        .floor()
+        .max(1.0) as usize;
 
     // Build rows.
     let total_items = playlist.len();
@@ -83,7 +85,7 @@ pub fn render(
         let target_row = target_idx / columns;
         // Estimate each row's height as thumb_w + label_h + spacing_y.
         let est_row_h = thumb_w + label_h + spacing_y;
-        let target_y = target_row as f32 * est_row_h;
+        let target_y = padding_y + target_row as f32 * est_row_h;
         // Centre the target in the viewport.
         let viewport_h = ui.available_height();
         let scroll_y = (target_y - viewport_h / 2.0 + est_row_h / 2.0).max(0.0);
@@ -97,9 +99,12 @@ pub fn render(
         // Track which items are (approximately) visible.
         let mut visible_paths: Vec<std::path::PathBuf> = Vec::new();
 
+        ui.add_space(padding_y);
+
         for row in 0..row_count {
             let row_start = row * columns;
             let row_end = (row_start + columns).min(total_items);
+            let items_in_row = row_end.saturating_sub(row_start);
 
             // Compute row height = tallest item + label.
             let row_thumb_h = item_display_heights[row_start..row_end]
@@ -113,6 +118,10 @@ pub fn render(
                 egui::vec2(available_width, row_h + spacing_y),
                 egui::Sense::hover(),
             );
+            let row_content_rect = egui::Rect::from_min_size(
+                row_rect.min,
+                egui::vec2(available_width, row_h),
+            );
 
             // Skip rendering if the row is outside the visible clip region.
             let row_visible = row_rect.max.y >= clip_rect.min.y
@@ -122,12 +131,16 @@ pub fn render(
                 continue;
             }
 
+            let gap_x = ((available_width - columns as f32 * thumb_w)
+                / (columns as f32 + 1.0))
+                .max(0.0);
+            let highlight_inset_x = gap_x * 0.25;
+            let highlight_pad_top = 8.0;
+            let highlight_pad_bottom = 0.0;
+
             // Render each item in this row.
-            for col in 0..columns {
+            for col in 0..items_in_row {
                 let item_idx = row_start + col;
-                if item_idx >= total_items {
-                    break;
-                }
 
                 let path = &playlist[item_idx];
                 visible_paths.push(path.clone());
@@ -135,15 +148,29 @@ pub fn render(
                 let item_thumb_h = item_display_heights[item_idx];
 
                 // Position this item within the row.
-                let x = row_rect.min.x + col as f32 * cell_w;
+                let x = row_content_rect.min.x + gap_x + col as f32 * (thumb_w + gap_x);
+                let cell_rect = egui::Rect::from_min_size(
+                    egui::pos2(x - gap_x * 0.5, row_content_rect.min.y),
+                    egui::vec2(thumb_w + gap_x, row_content_rect.height()),
+                );
+                let highlight_rect = egui::Rect::from_min_max(
+                    egui::pos2(
+                        cell_rect.min.x + highlight_inset_x,
+                        cell_rect.min.y - highlight_pad_top,
+                    ),
+                    egui::pos2(
+                        cell_rect.max.x - highlight_inset_x,
+                        cell_rect.max.y + highlight_pad_bottom,
+                    ),
+                );
                 // Vertically centre the thumbnail within the row's thumbnail area.
                 let thumb_y_offset = (row_thumb_h - item_thumb_h) / 2.0;
                 let thumb_rect = egui::Rect::from_min_size(
-                    egui::pos2(x, row_rect.min.y + thumb_y_offset),
+                    egui::pos2(x, row_content_rect.min.y + thumb_y_offset),
                     egui::vec2(thumb_w, item_thumb_h),
                 );
                 let label_rect = egui::Rect::from_min_size(
-                    egui::pos2(x, row_rect.min.y + row_thumb_h),
+                    egui::pos2(x, row_content_rect.min.y + row_thumb_h),
                     egui::vec2(thumb_w, label_h),
                 );
                 let full_item_rect = egui::Rect::from_min_max(
@@ -158,21 +185,22 @@ pub fn render(
                 // Selection highlight.
                 let is_selected = grid.selection.is_selected(item_idx);
                 if is_selected {
-                    let highlight_color = egui::Color32::from_rgba_unmultiplied(60, 120, 215, 60);
-                    ui.painter().rect_filled(full_item_rect.expand(2.0), 4.0, highlight_color);
+                    let highlight_color =
+                        egui::Color32::from_rgba_unmultiplied(60, 120, 215, 60);
+                    ui.painter().rect_filled(highlight_rect, 4.0, highlight_color);
                     let border_color = egui::Color32::from_rgb(60, 120, 215);
                     ui.painter().rect_stroke(
-                        full_item_rect.expand(2.0),
+                        highlight_rect,
                         4.0,
                         egui::Stroke::new(1.5, border_color),
-                        egui::StrokeKind::Outside,
+                        egui::StrokeKind::Inside,
                     );
                 }
 
                 // Hover highlight.
                 if response.hovered() && !is_selected {
                     let hover_color = egui::Color32::from_white_alpha(15);
-                    ui.painter().rect_filled(full_item_rect.expand(2.0), 4.0, hover_color);
+                    ui.painter().rect_filled(highlight_rect, 4.0, hover_color);
                 }
 
                 // Draw thumbnail content.
@@ -244,6 +272,8 @@ pub fn render(
                 }
             }
         }
+
+        ui.add_space(padding_y);
 
         // Lazy-load: request thumbnails for visible items.
         grid.request_thumbnails_for_paths(&visible_paths);
