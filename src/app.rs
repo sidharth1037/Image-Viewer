@@ -107,8 +107,11 @@ impl ImageApp {
         settings.directory_sort_preferences = persisted_state.directory_sort_preferences;
         let prev_pixel_based_1_to_1 = settings.pixel_based_1_to_1;
 
+        let mut workspace = Workspace::new(state);
+        workspace.playlist_grid = Some(crate::playlist_grid::PlaylistGridState::new(&cc.egui_ctx));
+
         let app = Self {
-            workspace: Workspace::new(state),
+            workspace,
             settings,
             is_focused: true,
             focus_settle_until: 0.0,
