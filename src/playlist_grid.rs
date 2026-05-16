@@ -14,6 +14,8 @@ use crate::thumbnail_provider::{ThumbnailRequest, ThumbnailResult};
 pub struct ThumbnailSettings {
     /// Desired width of each thumbnail cell in logical pixels.
     pub thumbnail_width: u32,
+    /// Max thumbnail height as a multiple of the width.
+    pub max_height_ratio: f32,
     /// Horizontal gap between items.
     pub item_spacing_x: f32,
     /// Vertical gap between rows.
@@ -26,6 +28,7 @@ impl Default for ThumbnailSettings {
     fn default() -> Self {
         Self {
             thumbnail_width: 160,
+            max_height_ratio: 1.4,
             item_spacing_x: 8.0,
             item_spacing_y: 12.0,
             label_height: 20.0,

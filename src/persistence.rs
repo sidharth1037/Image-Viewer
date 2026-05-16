@@ -15,6 +15,8 @@ pub struct PersistedAppState {
     pub loop_playlist: bool,
     pub fit_all_images_to_window: bool,
     pub pixel_based_1_to_1: bool,
+    #[serde(default = "default_thumbnail_width")]
+    pub thumbnail_width: u32,
     #[serde(default)]
     pub directory_sort_preferences: HashMap<String, PersistedDirectorySortPreference>,
 }
@@ -26,9 +28,14 @@ impl Default for PersistedAppState {
             loop_playlist: false,
             fit_all_images_to_window: true,
             pixel_based_1_to_1: false,
+            thumbnail_width: default_thumbnail_width(),
             directory_sort_preferences: HashMap::new(),
         }
     }
+}
+
+fn default_thumbnail_width() -> u32 {
+    160
 }
 
 pub fn directory_key(path: &Path) -> String {

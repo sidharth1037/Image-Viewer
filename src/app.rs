@@ -10,6 +10,7 @@ pub struct AppSettings {
     pub loop_playlist: bool,
     pub fit_all_images_to_window: bool,
     pub pixel_based_1_to_1: bool,
+    pub thumbnail_width: u32,
     pub directory_sort_preferences: std::collections::HashMap<String, crate::persistence::PersistedDirectorySortPreference>,
     pub shortcuts: crate::shortcuts::ShortcutConfig,
 }
@@ -20,6 +21,7 @@ impl Default for AppSettings {
             loop_playlist: false,
             fit_all_images_to_window: true,
             pixel_based_1_to_1: false,
+            thumbnail_width: 160,
             directory_sort_preferences: std::collections::HashMap::new(),
             shortcuts: crate::shortcuts::ShortcutConfig::default(),
         }
@@ -104,11 +106,15 @@ impl ImageApp {
         settings.loop_playlist = persisted_state.loop_playlist;
         settings.fit_all_images_to_window = persisted_state.fit_all_images_to_window;
         settings.pixel_based_1_to_1 = persisted_state.pixel_based_1_to_1;
+        settings.thumbnail_width = persisted_state.thumbnail_width;
         settings.directory_sort_preferences = persisted_state.directory_sort_preferences;
         let prev_pixel_based_1_to_1 = settings.pixel_based_1_to_1;
 
         let mut workspace = Workspace::new(state);
         workspace.playlist_grid = Some(crate::playlist_grid::PlaylistGridState::new(&cc.egui_ctx));
+        if let Some(grid) = workspace.playlist_grid.as_mut() {
+            grid.settings.thumbnail_width = settings.thumbnail_width;
+        }
 
         let app = Self {
             workspace,
@@ -353,6 +359,7 @@ impl eframe::App for ImageApp {
             loop_playlist: self.settings.loop_playlist,
             fit_all_images_to_window: self.settings.fit_all_images_to_window,
             pixel_based_1_to_1: self.settings.pixel_based_1_to_1,
+            thumbnail_width: self.settings.thumbnail_width,
             directory_sort_preferences: self.settings.directory_sort_preferences.clone(),
         };
         let _ = crate::persistence::save_persisted_state(&current_state);

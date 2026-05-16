@@ -38,9 +38,12 @@ pub fn render(
 
     let settings = &grid.settings;
     let thumb_w = settings.thumbnail_width as f32;
+    let max_thumb_h = thumb_w * settings.max_height_ratio;
     let min_spacing_x = settings.item_spacing_x;
     let spacing_y = settings.item_spacing_y;
-    let label_h = settings.label_height;
+    let label_font = egui::FontId::proportional(11.0);
+    let label_line_height = ui.painter().fonts_mut(|f| f.row_height(&label_font));
+    let label_h = settings.label_height.max(label_line_height * 2.0 + 4.0);
     let padding_y = 12.0;
 
     let available_width = ui.available_width();
@@ -60,9 +63,9 @@ pub fn render(
         let h = match grid.thumbnail_cache.get(path) {
             Some(ThumbnailEntry::Ready { width, height, .. }) if *width > 0 => {
                 let aspect = *height as f32 / *width as f32;
-                thumb_w * aspect
+                (thumb_w * aspect).min(max_thumb_h)
             }
-            _ => thumb_w, // Square placeholder for loading/error/unknown.
+            _ => thumb_w.min(max_thumb_h), // Square placeholder for loading/error/unknown.
         };
         item_display_heights.push(h);
     }
@@ -239,12 +242,77 @@ pub fn render(
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_else(|| "???".to_string());
 
-                let label_galley = ui.painter().layout(
+                let text_color = ui.visuals().text_color();
+                let mut job = egui::text::LayoutJob::simple(
                     file_name,
-                    egui::FontId::proportional(11.0),
-                    ui.visuals().text_color(),
+                    label_font.clone(),
+                    text_color,
                     thumb_w,
                 );
+                job.wrap.max_width = thumb_w;
+                job.wrap.max_rows = 2;
+                job.wrap.break_anywhere = true;
+                job.wrap.overflow_character = None;
+                let mut label_galley = ui.painter().fonts_mut(|f| f.layout_job(job));
+
+                if label_galley.elided {
+                    let ellipsis = "...";
+                    let ellipsis_job = egui::text::LayoutJob::simple(
+                        ellipsis.to_string(),
+                        label_font.clone(),
+                        text_color,
+                        f32::INFINITY,
+                    );
+                    let ellipsis_width = ui
+                        .painter()
+                        .fonts_mut(|f| f.layout_job(ellipsis_job))
+                        .size()
+                        .x;
+                    let mut lines: Vec<String> = label_galley
+                        .rows
+                        .iter()
+                        .take(2)
+                        .map(|row| row.text())
+                        .collect();
+
+                    if lines.is_empty() {
+                        lines.push(ellipsis.to_string());
+                    } else {
+                        let target_row_idx = lines.len() - 1;
+                        let target_row = &label_galley.rows[target_row_idx];
+                        let max_x = (thumb_w - ellipsis_width).max(0.0);
+                        let mut cut = target_row.glyphs.len();
+                        while cut > 0 && target_row.glyphs[cut - 1].max_x() > max_x {
+                            cut -= 1;
+                        }
+                        let trimmed: String = target_row.glyphs[..cut]
+                            .iter()
+                            .map(|g| g.chr)
+                            .collect();
+                        lines[target_row_idx] = if trimmed.is_empty() {
+                            ellipsis.to_string()
+                        } else {
+                            format!("{}{}", trimmed, ellipsis)
+                        };
+                    }
+
+                    let display = if lines.len() == 1 {
+                        lines[0].clone()
+                    } else {
+                        format!("{}\n{}", lines[0], lines[1])
+                    };
+                    let mut final_job = egui::text::LayoutJob::simple(
+                        display,
+                        label_font.clone(),
+                        text_color,
+                        thumb_w,
+                    );
+                    final_job.wrap.max_width = thumb_w;
+                    final_job.wrap.max_rows = 2;
+                    final_job.wrap.break_anywhere = true;
+                    final_job.wrap.overflow_character = None;
+                    label_galley = ui.painter().fonts_mut(|f| f.layout_job(final_job));
+                }
                 let text_pos = egui::pos2(
                     label_rect.center().x - label_galley.size().x / 2.0,
                     label_rect.min.y + 2.0,

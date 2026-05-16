@@ -32,6 +32,35 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             
             ui.add_space(12.0);
 
+            // --- FOLDER VIEW ---
+            ui.horizontal(|ui| {
+                ui.label(icons::FILE_IMAGE);
+                ui.heading("Folder View");
+            });
+            ui.add_space(4.0);
+
+            let thumb_steps = [60u32, 80, 100, 120, 140, 160, 180, 200, 220];
+            let mut step_index = thumb_steps
+                .iter()
+                .position(|&value| value == app.settings.thumbnail_width)
+                .unwrap_or(5);
+            let mut current_width = thumb_steps[step_index];
+
+            ui.horizontal(|ui| {
+                ui.label("Thumbnail size");
+                let slider = egui::Slider::new(&mut step_index, 0..=8).show_value(false);
+                if ui.add(slider).changed() {
+                    current_width = thumb_steps[step_index];
+                    app.settings.thumbnail_width = current_width;
+                    if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+                        grid.settings.thumbnail_width = current_width;
+                        grid.thumbnail_cache.clear();
+                        grid.pending_requests.clear();
+                    }
+                }
+                ui.label(format!("{} px", current_width));
+            });
+
             // --- NAVIGATION ---
             ui.horizontal(|ui| {
                 ui.label(icons::ARROWS_LEFT_RIGHT); 
