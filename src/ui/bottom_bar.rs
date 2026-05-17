@@ -171,27 +171,18 @@ fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
     if app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid {
         let playlist = &app.workspace.active_view().active_playlist;
         let total_items = playlist.len();
-        let total_size_bytes = playlist
-            .iter()
-            .filter_map(|path| std::fs::metadata(path).ok().map(|meta| meta.len()))
-            .sum::<u64>();
-
-        let (selected_count, selected_size_bytes) = app
+        let (selected_count, selected_size_bytes, total_size_bytes) = app
             .workspace
             .playlist_grid
             .as_ref()
             .map(|grid| {
-                let selected_count = grid.selection.selected.len();
-                let selected_size_bytes = grid
-                    .selection
-                    .selected
-                    .iter()
-                    .filter_map(|index| playlist.get(*index))
-                    .filter_map(|path| std::fs::metadata(path).ok().map(|meta| meta.len()))
-                    .sum::<u64>();
-                (selected_count, selected_size_bytes)
+                (
+                    grid.selection.selected.len(),
+                    grid.cached_selected_size_bytes,
+                    grid.cached_total_size_bytes,
+                )
             })
-            .unwrap_or((0, 0));
+            .unwrap_or((0, 0, 0));
 
         let total_label = if total_items == 1 { "item" } else { "items" };
         let right_text = format!(

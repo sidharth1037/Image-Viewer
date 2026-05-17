@@ -125,6 +125,9 @@ pub struct PlaylistGridState {
     /// Scroll offset to restore on re-entry.
     pub scroll_to_index: Option<usize>,
 
+    pub cached_total_size_bytes: u64,
+    pub cached_selected_size_bytes: u64,
+
     // ── Thumbnail worker channels ──
     pub thumb_req_tx: Sender<ThumbnailRequest>,
     pub thumb_res_rx: Receiver<ThumbnailResult>,
@@ -145,10 +148,30 @@ impl PlaylistGridState {
             selection: PlaylistSelection::default(),
             settings: ThumbnailSettings::default(),
             scroll_to_index: None,
+            cached_total_size_bytes: 0,
+            cached_selected_size_bytes: 0,
             thumb_req_tx: req_tx,
             thumb_res_rx: res_rx,
             thumb_epoch: epoch,
         }
+    }
+
+    pub fn refresh_total_size_cache(&mut self, playlist: &[PathBuf]) {
+        self.cached_total_size_bytes = playlist
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok().map(|meta| meta.len()))
+            .sum();
+        self.refresh_selected_size_cache(playlist);
+    }
+
+    pub fn refresh_selected_size_cache(&mut self, playlist: &[PathBuf]) {
+        self.cached_selected_size_bytes = self
+            .selection
+            .selected
+            .iter()
+            .filter_map(|index| playlist.get(*index))
+            .filter_map(|path| std::fs::metadata(path).ok().map(|meta| meta.len()))
+            .sum();
     }
 
     /// Drain the result channel and upload textures for completed thumbnails.
@@ -221,5 +244,7 @@ impl PlaylistGridState {
         self.pending_requests.clear();
         self.selection.clear();
         self.scroll_to_index = None;
+        self.cached_total_size_bytes = 0;
+        self.cached_selected_size_bytes = 0;
     }
 }

@@ -33,6 +33,10 @@ pub fn render(
     let playlist = &active_view.active_playlist;
 
     if playlist.is_empty() {
+        let filter_text = active_view.filter.criteria.text.trim();
+        if !filter_text.is_empty() && !active_view.source_playlist.is_empty() {
+            return render_empty_filter(ui, filter_text);
+        }
         return render_empty_folder(ui);
     }
 
@@ -333,6 +337,7 @@ pub fn render(
                         modifiers.shift,
                         total_items,
                     );
+                    grid.refresh_selected_size_cache(playlist);
                 }
 
                 if response.hovered() {
@@ -403,4 +408,25 @@ fn render_empty_folder(ui: &mut egui::Ui) -> PlaylistGridAction {
     }
 
     action
+}
+
+fn render_empty_filter(ui: &mut egui::Ui, filter_text: &str) -> PlaylistGridAction {
+    let area_rect = ui.max_rect();
+    let mut group_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(area_rect)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+    );
+
+    let content_height = 60.0;
+    let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+    group_ui.add_space(top_padding);
+
+    let message = format!(
+        "No files found with the current filter.\nContains: {}",
+        filter_text
+    );
+    group_ui.add(egui::Label::new(message).selectable(false));
+
+    PlaylistGridAction::None
 }

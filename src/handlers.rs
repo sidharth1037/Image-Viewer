@@ -492,6 +492,11 @@ pub fn clear_active_view(app: &mut ImageApp) {
     // Preload ring — discard all cached data
     view.preload.on_new_open();
 
+    app.workspace.content_mode = crate::workspace::ContentMode::Empty;
+    if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+        grid.clear_for_new_folder();
+    }
+
     // Clear the title cache so the window title updates immediately.
     app.cached_title.clear();
 }
@@ -516,6 +521,10 @@ fn rebuild_active_playlist_and_reconcile_current(app: &mut ImageApp, index: usiz
             app.settings.loop_playlist,
             None,
         );
+        if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+            grid.selection.clear();
+            grid.refresh_total_size_cache(&playlist_snapshot);
+        }
         return;
     }
 
@@ -527,7 +536,7 @@ fn rebuild_active_playlist_and_reconcile_current(app: &mut ImageApp, index: usiz
     let changed_target = previous_path.as_ref() != Some(&target_path);
 
     app.workspace.views[index].current_index = target_index;
-    if changed_target {
+    if changed_target && app.workspace.content_mode == crate::workspace::ContentMode::Canvas {
         // Force the file to load on active view?
         // Wait, `load_target_file` loads on active view only!
         // For simplicity let's save the current view, switch to index, load, switch back.
@@ -537,18 +546,21 @@ fn rebuild_active_playlist_and_reconcile_current(app: &mut ImageApp, index: usiz
         app.workspace.active_view_index = active;
     }
 
-    let view = &mut app.workspace.views[index];
-    let playlist_snapshot = view.active_playlist.clone();
-    let current_path = view.current_file_path.clone();
-    let current_index = view.current_index;
+    let playlist_snapshot = app.workspace.views[index].active_playlist.clone();
+    let current_path = app.workspace.views[index].current_file_path.clone();
+    let current_index = app.workspace.views[index].current_index;
     let loop_playlist = app.settings.loop_playlist;
-    
-    view.preload.on_playlist_updated(
+
+    app.workspace.views[index].preload.on_playlist_updated(
         &playlist_snapshot,
         current_index,
         loop_playlist,
         current_path.as_ref(),
     );
+
+    if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+        grid.refresh_total_size_cache(&playlist_snapshot);
+    }
 }
 
 fn apply_loaded_image(app: &mut ImageApp, ctx: &egui::Context, loaded_image: crate::image_io::LoadedImage, view_index: usize) {
@@ -792,6 +804,64 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         return_to_playlist_pressed,
     ) = input;
 
+    let is_playlist_grid = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
+
+    if is_playlist_grid {
+        if clear_view {
+            clear_active_view(app);
+            return;
+        }
+
+        if reload_current_context {
+            refresh_current_context(app, time);
+        }
+
+        if app.show_filter_popup {
+            if toggle_search {
+                toggle_filter_popup(app);
+                set_overlay_message(app, time, "Shortcut: Toggle filter popup");
+            }
+            return;
+        }
+
+        if cycle_sort_prev {
+            cycle_sort_method(app, -1);
+            let text = format!("Shortcut: Sort type -> {}", sort_method_name(app.workspace.active_view().sort_method));
+            set_overlay_message(app, time, &text);
+        }
+        if cycle_sort_next {
+            cycle_sort_method(app, 1);
+            let text = format!("Shortcut: Sort type -> {}", sort_method_name(app.workspace.active_view().sort_method));
+            set_overlay_message(app, time, &text);
+        }
+
+        if sort_ascending {
+            set_sort_order(app, crate::scanner::SortOrder::Ascending);
+            set_overlay_message(app, time, "Shortcut: Sort ascending");
+        }
+        if sort_descending {
+            set_sort_order(app, crate::scanner::SortOrder::Descending);
+            set_overlay_message(app, time, "Shortcut: Sort descending");
+        }
+
+        if toggle_settings {
+            toggle_settings_window(app);
+            set_overlay_message(app, time, "Shortcut: Toggle settings");
+        }
+
+        if toggle_search {
+            toggle_filter_popup(app);
+            set_overlay_message(app, time, "Shortcut: Toggle filter popup");
+        }
+
+        if close_window {
+            set_overlay_message(app, time, "Shortcut: Close window");
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        return;
+    }
+
     let is_split_toggle = ctx.input(|i| i.modifiers.alt && i.key_pressed(egui::Key::C));
 
     if is_split_toggle {
@@ -857,7 +927,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             open_save_overwrite_dialog(app, time);
         }
         if reload_current_context {
-            reload_current_context_like_overwrite(app, time);
+            refresh_current_context(app, time);
         }
         return;
     }
@@ -924,7 +994,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     }
 
     if reload_current_context {
-        reload_current_context_like_overwrite(app, time);
+        refresh_current_context(app, time);
     }
 
     if rotate_clockwise {
@@ -1449,14 +1519,26 @@ fn reload_path_like_overwrite(app: &mut ImageApp, path: std::path::PathBuf) {
     open_target(app, path);
 }
 
-fn reload_current_context_like_overwrite(app: &mut ImageApp, time: f64) {
+pub fn refresh_current_context(app: &mut ImageApp, time: f64) {
+    if app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid {
+        let Some(folder) = app.workspace.active_view().current_folder.clone() else {
+            set_overlay_message(app, time, "Shortcut: No folder to refresh");
+            return;
+        };
+
+        let scan_target = folder.join("__folder_refresh_target__");
+        request_directory_scan(app, scan_target);
+        set_overlay_message(app, time, "Shortcut: Refreshed folder");
+        return;
+    }
+
     let Some(path) = app.workspace.active_view_mut().current_file_path.clone() else {
-        set_overlay_message(app, time, "Shortcut: No file to reload");
+        set_overlay_message(app, time, "Shortcut: No file to refresh");
         return;
     };
 
     reload_path_like_overwrite(app, path);
-    set_overlay_message(app, time, "Shortcut: Reloaded current file and playlist");
+    set_overlay_message(app, time, "Shortcut: Refreshed current file and playlist");
 }
 
 // ── Playlist Grid Handlers ───────────────────────────────────────────────
@@ -1542,9 +1624,11 @@ pub fn return_to_playlist_view(app: &mut ImageApp) {
     view.reset_start_time = None;
     view.preload.on_new_open();
     app.workspace.content_mode = crate::workspace::ContentMode::PlaylistGrid;
+    let playlist_snapshot = app.workspace.active_view().active_playlist.clone();
     if let Some(grid) = app.workspace.playlist_grid.as_mut() {
         grid.selection.select_single(current_index);
         grid.scroll_to_index = Some(current_index);
+        grid.refresh_selected_size_cache(&playlist_snapshot);
     }
     if app.workspace.is_split() {
         app.workspace.views.truncate(1);
