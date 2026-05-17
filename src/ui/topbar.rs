@@ -192,7 +192,11 @@ fn is_bar_visible_in_immersive(app: &ImageApp, ctx: &egui::Context) -> bool {
 
 pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
     // --- SETTINGS INTEGRATION ---
-    let is_immersive = app.workspace.active_view().is_fullscreen && app.settings.immersive_maximized;
+    let is_single_canvas =
+        app.workspace.content_mode == crate::workspace::ContentMode::Canvas && !app.workspace.is_split();
+    let is_immersive = is_single_canvas
+        && app.workspace.active_view().is_fullscreen
+        && app.settings.immersive_maximized;
 
     if is_immersive {
         let mut show_bars = is_bar_visible_in_immersive(app, ctx);
@@ -287,16 +291,24 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
     ui.horizontal_centered(|ui| {
         ui.add_space(8.0);
 
-        let layout = resolve_topbar_layout(ui.available_width());
+        let mut layout = resolve_topbar_layout(ui.available_width());
+        if app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid {
+            layout.controls.show_jump_group = false;
+        }
         let avail_px = (ui.available_width() - layout.reserved_for_buttons).max(0.0);
 
-        let current_file_name_len = app.workspace.active_view().current_file_name.len();
+        let is_playlist_grid = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
+        let current_file_name_len = if is_playlist_grid {
+            0
+        } else {
+            app.workspace.active_view().current_file_name.len()
+        };
 
         if (app.last_title_width - avail_px).abs() > 5.0 || app.cached_title.is_empty() {
-            let full_title = if current_file_name_len == 0 { 
-                "Image Viewer".to_string() 
-            } else { 
-                app.workspace.active_view().current_file_name.clone() 
+            let full_title = if is_playlist_grid || current_file_name_len == 0 {
+                "Image Viewer".to_string()
+            } else {
+                app.workspace.active_view().current_file_name.clone()
             };
             
             let max_chars = (avail_px / 7.0).floor() as usize;

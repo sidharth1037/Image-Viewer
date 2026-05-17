@@ -127,18 +127,15 @@ pub fn render(
     // In split view, allocate a focus indicator strip before the canvas.
     // This pushes the canvas content down so the indicator never overlaps the image.
     let show_focus_indicator = is_split && is_active;
-    let mut indicator_x_range = None;
 
     if is_split {
         let strip_size = egui::vec2(ui.available_width(), FOCUS_INDICATOR_HEIGHT);
         let (strip_rect, _) = ui.allocate_exact_size(strip_size, egui::Sense::hover());
 
-        if show_focus_indicator && !immersive_topbar_visible {
+        if show_focus_indicator {
             let line_color = egui::Color32::from_rgb(0, 122, 204);
             ui.painter().rect_filled(strip_rect, 0.0, line_color);
         }
-
-        indicator_x_range = Some(strip_rect.x_range());
     }
 
     // Allocate a persistent interaction area for the entire canvas.
@@ -153,20 +150,6 @@ pub fn render(
     let (response, painter) = ui.allocate_painter(canvas_size, canvas_sense);
     painter.rect_filled(response.rect, 0.0, ui.visuals().window_fill());
 
-    // When immersive topbar is visible, draw the focus indicator at the topbar's bottom
-    // edge using a foreground painter so it stays visible above the floating overlay.
-    if show_focus_indicator && immersive_topbar_visible {
-        if let Some(x_range) = indicator_x_range {
-            let line_color = egui::Color32::from_rgb(0, 122, 204);
-            let line_stroke = egui::Stroke::new(FOCUS_INDICATOR_HEIGHT, line_color);
-            let y = IMMERSIVE_TOPBAR_HEIGHT + FOCUS_INDICATOR_HEIGHT * 0.5;
-            ctx.layer_painter(egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::new("split_focus_indicator"),
-            ))
-            .hline(x_range, y, line_stroke);
-        }
-    }
 
     let mut fit_scale = 1.0;
     let mut min_zoom_scale = 1.0;

@@ -202,6 +202,8 @@ impl eframe::App for ImageApp {
         
         let is_playlist_grid = self.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
 
+        ui::bottom_bar::render(self, ctx);
+
         if is_playlist_grid {
             // Playlist grid mode: render the thumbnail grid in the central panel.
             let panel_output = egui::CentralPanel::default()
@@ -227,7 +229,6 @@ impl eframe::App for ImageApp {
             }
         } else {
             // Canvas / Empty mode: existing rendering path.
-            ui::bottom_bar::render(self, ctx);
             ui::adjustment_overlay::render(ctx, self.workspace.active_view());
 
             let panel_output = egui::CentralPanel::default()
@@ -243,7 +244,11 @@ impl eframe::App for ImageApp {
 
             let mut dialog_backdrop_rect = result.active_canvas_rect;
 
-            let is_immersive = self.workspace.active_view().is_fullscreen && self.settings.immersive_maximized;
+            let is_single_canvas =
+                self.workspace.content_mode == crate::workspace::ContentMode::Canvas && !self.workspace.is_split();
+            let is_immersive = is_single_canvas
+                && self.workspace.active_view().is_fullscreen
+                && self.settings.immersive_maximized;
             if is_immersive {
                 if self.immersive_topbar_visible {
                     dialog_backdrop_rect.min.y = dialog_backdrop_rect.min.y.max(

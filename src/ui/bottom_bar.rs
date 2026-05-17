@@ -168,6 +168,71 @@ fn set_cursor_to_end(ctx: &egui::Context, text_id: egui::Id, char_count: usize) 
 }
 
 fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
+    if app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid {
+        let playlist = &app.workspace.active_view().active_playlist;
+        let total_items = playlist.len();
+        let total_size_bytes = playlist
+            .iter()
+            .filter_map(|path| std::fs::metadata(path).ok().map(|meta| meta.len()))
+            .sum::<u64>();
+
+        let (selected_count, selected_size_bytes) = app
+            .workspace
+            .playlist_grid
+            .as_ref()
+            .map(|grid| {
+                let selected_count = grid.selection.selected.len();
+                let selected_size_bytes = grid
+                    .selection
+                    .selected
+                    .iter()
+                    .filter_map(|index| playlist.get(*index))
+                    .filter_map(|path| std::fs::metadata(path).ok().map(|meta| meta.len()))
+                    .sum::<u64>();
+                (selected_count, selected_size_bytes)
+            })
+            .unwrap_or((0, 0));
+
+        let total_label = if total_items == 1 { "item" } else { "items" };
+        let right_text = format!(
+            "{} {} | {}",
+            total_items,
+            total_label,
+            format_file_size(total_size_bytes)
+        );
+
+        let left_text = if selected_count > 0 {
+            let selected_label = if selected_count == 1 { "item" } else { "items" };
+            Some(format!(
+                "{} | {} {} selected",
+                format_file_size(selected_size_bytes),
+                selected_count,
+                selected_label
+            ))
+        } else {
+            None
+        };
+
+        ui.horizontal_centered(|ui| {
+            ui.add_space(8.0);
+            if let Some(text) = left_text {
+                let left_label = ui.label(text);
+                if left_label.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+                }
+            }
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(8.0);
+                let right_label = ui.label(right_text);
+                if right_label.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
+                }
+            });
+        });
+        return;
+    }
+
     let active_view_has_target = app.workspace.active_view().current_file_path.is_some() || !app.workspace.active_view().active_playlist.is_empty();
     if !active_view_has_target {
         // Keep geometry stable without consuming the full unconstrained overlay height.
@@ -339,7 +404,9 @@ fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
 
 pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
     let active_view = app.workspace.active_view();
-    let is_immersive = active_view.is_fullscreen && app.settings.immersive_maximized;
+    let is_single_canvas =
+        app.workspace.content_mode == crate::workspace::ContentMode::Canvas && !app.workspace.is_split();
+    let is_immersive = is_single_canvas && active_view.is_fullscreen && app.settings.immersive_maximized;
     let is_editing = app.bottom_bar_scale_editing || app.bottom_bar_index_editing;
 
     if is_immersive {
