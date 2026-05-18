@@ -43,8 +43,10 @@ pub fn default_order_for(method: SortMethod) -> SortOrder {
 
 pub struct ScanRequest {
     pub target_path: PathBuf,
+    pub scan_root: PathBuf,
     pub sort_method: SortMethod,
     pub sort_order: SortOrder,
+    pub recursive: bool,
     pub request_id: u64,
 }
 
@@ -52,6 +54,17 @@ pub struct DirectoryState {
     pub request_id: u64,
     pub folder_path: PathBuf,
     pub playlist: Vec<PathBuf>,
+}
+
+fn should_include_path(path: &std::path::Path, target_path: &std::path::Path, valid_exts: &[&str]) -> bool {
+    if path == target_path {
+        return true;
+    }
+
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|ext| valid_exts.contains(&ext.to_lowercase().as_str()))
+        .unwrap_or(false)
 }
 
 pub fn spawn_directory_scanner(id_tracker: Arc<AtomicU64>) -> (Sender<ScanRequest>, Receiver<DirectoryState>) {
@@ -74,10 +87,44 @@ pub fn spawn_directory_scanner(id_tracker: Arc<AtomicU64>) -> (Sender<ScanReques
                 continue;
             }
 
-            if let Some(folder) = request.target_path.parent() {
+            let scan_root = if request.scan_root.is_dir() {
+                request.scan_root.clone()
+            } else {
+                request
+                    .scan_root
+                    .parent()
+                    .map(|parent| parent.to_path_buf())
+                    .unwrap_or_else(|| request.scan_root.clone())
+            };
+
+            if scan_root.exists() {
                 let mut playlist = Vec::new();
-                
-                if let Ok(entries) = std::fs::read_dir(folder) {
+                if request.recursive {
+                    let mut stack = vec![scan_root.clone()];
+                    while let Some(dir) = stack.pop() {
+                        if id_tracker.load(Ordering::Acquire) != request.request_id {
+                            playlist.clear();
+                            break;
+                        }
+
+                        let Ok(entries) = std::fs::read_dir(dir) else { continue; };
+                        for entry in entries.flatten() {
+                            if id_tracker.load(Ordering::Acquire) != request.request_id {
+                                playlist.clear();
+                                break;
+                            }
+
+                            let path = entry.path();
+                            if path.is_dir() {
+                                stack.push(path);
+                            } else if path.is_file() {
+                                if should_include_path(&path, &request.target_path, &valid_exts) {
+                                    playlist.push(path);
+                                }
+                            }
+                        }
+                    }
+                } else if let Ok(entries) = std::fs::read_dir(&scan_root) {
                     for entry in entries.flatten() {
                         if id_tracker.load(Ordering::Acquire) != request.request_id {
                             playlist.clear();
@@ -86,15 +133,7 @@ pub fn spawn_directory_scanner(id_tracker: Arc<AtomicU64>) -> (Sender<ScanReques
 
                         let path = entry.path();
                         if path.is_file() {
-                            // Always include the currently targeted file, even if it has no/odd extension.
-                            let include_target = path == request.target_path;
-                            let include_by_ext = path
-                                .extension()
-                                .and_then(|e| e.to_str())
-                                .map(|ext| valid_exts.contains(&ext.to_lowercase().as_str()))
-                                .unwrap_or(false);
-
-                            if include_target || include_by_ext {
+                            if should_include_path(&path, &request.target_path, &valid_exts) {
                                 playlist.push(path);
                             }
                         }
@@ -173,7 +212,7 @@ pub fn spawn_directory_scanner(id_tracker: Arc<AtomicU64>) -> (Sender<ScanReques
 
                 let _ = res_tx.send(DirectoryState {
                     request_id: request.request_id,
-                    folder_path: folder.to_path_buf(),
+                    folder_path: scan_root,
                     playlist,
                 });
             }

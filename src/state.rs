@@ -56,6 +56,8 @@ pub struct ViewerState {
     pub filter: FilterState,
     pub sort_method: crate::scanner::SortMethod, 
     pub sort_order: crate::scanner::SortOrder,
+    pub recursive_scan_enabled: bool,
+    pub scanning_in_progress: bool,
     pub scan_id: Arc<AtomicU64>, // Cancellation token for folder scans
     pub dir_req_tx: Sender<crate::scanner::ScanRequest>, 
     pub dir_res_rx: Receiver<crate::scanner::DirectoryState>,
@@ -115,6 +117,8 @@ impl ViewerState {
             filter: FilterState::default(),
             sort_method: crate::scanner::SortMethod::Natural,
             sort_order: crate::scanner::default_order_for(crate::scanner::SortMethod::Natural),
+            recursive_scan_enabled: false,
+            scanning_in_progress: false,
             scan_id,
             dir_req_tx,
             dir_res_rx,
@@ -149,6 +153,8 @@ impl ViewerState {
         next_state.filter = FilterState { criteria: self.filter.criteria.clone() };
         next_state.sort_method = self.sort_method.clone();
         next_state.sort_order = self.sort_order.clone();
+        next_state.recursive_scan_enabled = self.recursive_scan_enabled;
+        next_state.scanning_in_progress = self.scanning_in_progress;
 
         // Load the image naturally by queuing a request
         if let Some(path) = &self.current_file_path {

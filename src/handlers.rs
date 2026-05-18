@@ -74,24 +74,35 @@ fn apply_sort_preference_for_directory(app: &mut ImageApp, directory: &std::path
 }
 
 pub fn request_directory_scan(app: &mut ImageApp, target_path: std::path::PathBuf) {
-    if let Some(target_dir) = target_path.parent() {
-        if app
-            .workspace.active_view()
-            .current_folder
-            .as_ref()
-            .is_some_and(|current| current.as_path() == target_dir)
-        {
-            persist_sort_preference_for_directory(app, target_dir);
-        } else {
-            apply_sort_preference_for_directory(app, target_dir);
-        }
+    app.workspace.active_view_mut().scanning_in_progress = true;
+
+    let scan_root = app
+        .workspace
+        .active_view()
+        .current_folder
+        .clone()
+        .or_else(|| target_path.parent().map(|parent| parent.to_path_buf()))
+        .unwrap_or_else(|| target_path.clone());
+
+    if app
+        .workspace
+        .active_view()
+        .current_folder
+        .as_ref()
+        .is_some_and(|current| current.as_path() == scan_root.as_path())
+    {
+        persist_sort_preference_for_directory(app, &scan_root);
+    } else {
+        apply_sort_preference_for_directory(app, &scan_root);
     }
 
     let request_id = next_scan_request_id(app);
     let _ = app.workspace.active_view().dir_req_tx.send(crate::scanner::ScanRequest {
         target_path,
+        scan_root,
         sort_method: app.workspace.active_view().sort_method,
         sort_order: app.workspace.active_view().sort_order,
+        recursive: app.workspace.active_view().recursive_scan_enabled,
         request_id,
     });
 }
@@ -114,6 +125,24 @@ pub fn rescan_current_sort(app: &mut ImageApp) {
     if let Some(path) = current_sort_target_path(app) {
         request_directory_scan(app, path);
     }
+}
+
+fn rescan_current_folder(app: &mut ImageApp) {
+    if let Some(folder) = app.workspace.active_view().current_folder.clone() {
+        let scan_target = folder.join("__folder_recursive_toggle__");
+        request_directory_scan(app, scan_target);
+        return;
+    }
+
+    if let Some(path) = current_sort_target_path(app) {
+        request_directory_scan(app, path);
+    }
+}
+
+pub fn toggle_recursive_scan(app: &mut ImageApp) {
+    let next = !app.workspace.active_view().recursive_scan_enabled;
+    app.workspace.active_view_mut().recursive_scan_enabled = next;
+    rescan_current_folder(app);
 }
 
 pub fn set_sort_order(app: &mut ImageApp, order: crate::scanner::SortOrder) {
@@ -478,6 +507,8 @@ pub fn clear_active_view(app: &mut ImageApp) {
     // Sort state — reset to defaults
     view.sort_method = crate::scanner::SortMethod::Natural;
     view.sort_order = crate::scanner::default_order_for(crate::scanner::SortMethod::Natural);
+    view.recursive_scan_enabled = false;
+    view.scanning_in_progress = false;
 
     // Adjustment state
     view.original_pixels.clear();
@@ -1330,6 +1361,7 @@ pub fn process_directory_scanning(app: &mut ImageApp) {
             if scan.request_id != expected_id {
                 continue;
             }
+            app.workspace.views[i].scanning_in_progress = false;
             app.workspace.views[i].current_folder = Some(scan.folder_path.clone());
             app.workspace.views[i].source_playlist = scan.playlist.clone();
             rebuild_active_playlist_and_reconcile_current(app, i);

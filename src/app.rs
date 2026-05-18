@@ -205,6 +205,16 @@ impl eframe::App for ImageApp {
         ui::bottom_bar::render(self, ctx);
 
         if is_playlist_grid {
+            let recursive_scan_enabled = self.workspace.active_view().recursive_scan_enabled;
+            let toolbar_buttons = ui::folder_toolbar::default_buttons(recursive_scan_enabled);
+            if let Some(action) = ui::folder_toolbar::render(ctx, &toolbar_buttons) {
+                match action {
+                    ui::folder_toolbar::FolderToolbarAction::ToggleRecursiveScan => {
+                        handlers::toggle_recursive_scan(self);
+                    }
+                }
+            }
+
             // Playlist grid mode: render the thumbnail grid in the central panel.
             let panel_output = egui::CentralPanel::default()
                 .frame(egui::Frame::new())

@@ -31,8 +31,13 @@ pub fn render(
 
     let active_view = &app.workspace.views[app.workspace.active_view_index];
     let playlist = &active_view.active_playlist;
+    let is_scanning = active_view.scanning_in_progress;
 
     if playlist.is_empty() {
+        if is_scanning {
+            ctx.request_repaint();
+            return render_scanning_folder(ui);
+        }
         let filter_text = active_view.filter.criteria.text.trim();
         if !filter_text.is_empty() && !active_view.source_playlist.is_empty() {
             return render_empty_filter(ui, filter_text);
@@ -401,6 +406,25 @@ fn render_empty_folder(ui: &mut egui::Ui) -> PlaylistGridAction {
     }
 
     action
+}
+
+fn render_scanning_folder(ui: &mut egui::Ui) -> PlaylistGridAction {
+    let area_rect = ui.max_rect();
+    let mut group_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(area_rect)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+    );
+
+    let content_height = 64.0;
+    let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+    group_ui.add_space(top_padding);
+
+    group_ui.add(egui::Spinner::new().size(20.0));
+    group_ui.add_space(8.0);
+    group_ui.add(egui::Label::new("Scanning folder...").selectable(false));
+
+    PlaylistGridAction::None
 }
 
 fn render_empty_filter(ui: &mut egui::Ui, filter_text: &str) -> PlaylistGridAction {
