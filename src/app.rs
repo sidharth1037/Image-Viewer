@@ -10,6 +10,7 @@ pub struct AppSettings {
     pub loop_playlist: bool,
     pub fit_all_images_to_window: bool,
     pub pixel_based_1_to_1: bool,
+    pub groups_enabled: bool,
     pub thumbnail_width: u32,
     pub directory_sort_preferences: std::collections::HashMap<String, crate::persistence::PersistedDirectorySortPreference>,
     pub shortcuts: crate::shortcuts::ShortcutConfig,
@@ -21,6 +22,7 @@ impl Default for AppSettings {
             loop_playlist: false,
             fit_all_images_to_window: true,
             pixel_based_1_to_1: false,
+            groups_enabled: false,
             thumbnail_width: 160,
             directory_sort_preferences: std::collections::HashMap::new(),
             shortcuts: crate::shortcuts::ShortcutConfig::default(),
@@ -106,6 +108,7 @@ impl ImageApp {
         settings.loop_playlist = persisted_state.loop_playlist;
         settings.fit_all_images_to_window = persisted_state.fit_all_images_to_window;
         settings.pixel_based_1_to_1 = persisted_state.pixel_based_1_to_1;
+        settings.groups_enabled = persisted_state.groups_enabled;
         settings.thumbnail_width = persisted_state.thumbnail_width;
         settings.directory_sort_preferences = persisted_state.directory_sort_preferences;
         let prev_pixel_based_1_to_1 = settings.pixel_based_1_to_1;
@@ -220,8 +223,27 @@ impl eframe::App for ImageApp {
                 .frame(egui::Frame::new())
                 .show(ctx, |ui| {
                     let bg = ui.visuals().window_fill();
-                    ui.painter().rect_filled(ui.max_rect(), 0.0, bg);
-                    crate::ui::playlist_grid::render(self, ctx, ui)
+                    let panel_rect = ui.max_rect();
+                    ui.painter().rect_filled(panel_rect, 0.0, bg);
+
+                    let tabs_height = crate::ui::group_tabs::tabs_height(self);
+                    if tabs_height > 0.0 {
+                        let tabs_rect = egui::Rect::from_min_size(
+                            panel_rect.min,
+                            egui::vec2(panel_rect.width(), tabs_height),
+                        );
+                        crate::ui::group_tabs::render_in_rect(self, ctx, ui, tabs_rect);
+                    }
+
+                    let content_rect = egui::Rect::from_min_max(
+                        egui::pos2(panel_rect.min.x, panel_rect.min.y + tabs_height),
+                        panel_rect.max,
+                    );
+
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+                        crate::ui::playlist_grid::render(self, ctx, ui)
+                    })
+                    .inner
                 });
 
             let grid_action = panel_output.inner;
@@ -374,6 +396,7 @@ impl eframe::App for ImageApp {
             loop_playlist: self.settings.loop_playlist,
             fit_all_images_to_window: self.settings.fit_all_images_to_window,
             pixel_based_1_to_1: self.settings.pixel_based_1_to_1,
+            groups_enabled: self.settings.groups_enabled,
             thumbnail_width: self.settings.thumbnail_width,
             directory_sort_preferences: self.settings.directory_sort_preferences.clone(),
         };

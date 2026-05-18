@@ -386,6 +386,7 @@ pub fn toggle_settings_window(app: &mut ImageApp) {
 /// Queues both image loading and directory scanning through the same runtime paths.
 pub fn open_target(app: &mut ImageApp, path: std::path::PathBuf) {
     // Opening a new target starts a fresh context; no previous preload on first entry.
+    app.workspace.group_tabs.reset_for_new_folder();
     app.workspace.content_mode = crate::workspace::ContentMode::Canvas;
     app.workspace.active_view_mut().preload.on_new_open();
     load_target_file(app, path.clone());
@@ -1583,6 +1584,7 @@ pub fn open_folder(app: &mut ImageApp, ctx: &egui::Context, folder_path: std::pa
     if let Some(grid) = app.workspace.playlist_grid.as_mut() {
         grid.clear_for_new_folder();
     }
+    app.workspace.group_tabs.reset_for_new_folder();
     app.workspace.content_mode = crate::workspace::ContentMode::PlaylistGrid;
     let scan_target = folder_path.join("__folder_open_target__");
     app.workspace.active_view_mut().current_folder = Some(folder_path);

@@ -39,6 +39,9 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             });
             ui.add_space(4.0);
 
+            ui.checkbox(&mut app.settings.groups_enabled, "Enable Groups")
+                .on_hover_text("Show the Groups tab strip for organizing the current folder view.");
+
             let thumb_steps = [60u32, 80, 100, 120, 140, 160, 180, 200, 220];
             let mut step_index = thumb_steps
                 .iter()

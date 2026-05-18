@@ -10,3 +10,4 @@ pub mod adjustment_overlay;
 pub mod sort_controls;
 pub mod dialogs;
 pub mod playlist_grid;
+pub mod group_tabs;

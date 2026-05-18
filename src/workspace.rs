@@ -20,6 +20,7 @@ pub struct Workspace {
     /// Playlist grid state — kept alive when transitioning to Canvas so that
     /// Esc can return to it.  `None` until the user first opens a folder.
     pub playlist_grid: Option<PlaylistGridState>,
+    pub group_tabs: crate::groups::GroupTabsState,
 }
 
 impl Workspace {
@@ -29,6 +30,7 @@ impl Workspace {
             active_view_index: 0,
             content_mode: ContentMode::Empty,
             playlist_grid: None,
+            group_tabs: crate::groups::GroupTabsState::new(),
         }
     }
 

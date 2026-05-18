@@ -13,6 +13,7 @@ mod thumbnail_provider;
 mod playlist_grid;
 mod shortcuts;
 mod persistence;
+mod groups;
 mod ui;
 mod handlers;
 mod workspace;
