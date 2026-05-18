@@ -43,6 +43,7 @@ pub fn render(
     let settings = &grid.settings;
     let thumb_w = settings.thumbnail_width as f32;
     let max_thumb_h = thumb_w * settings.max_height_ratio;
+    let max_height_ratio = settings.max_height_ratio;
     let min_spacing_x = settings.item_spacing_x;
     let spacing_y = settings.item_spacing_y;
     let label_font = egui::FontId::proportional(11.0);
@@ -58,21 +59,6 @@ pub fn render(
     // Build rows.
     let total_items = playlist.len();
     let row_count = (total_items + columns - 1) / columns;
-
-    // Pre-calculate per-item thumbnail display sizes.
-    // For each item, determine the height it would take at `thumb_w` width
-    // while preserving aspect ratio.
-    let mut item_display_heights: Vec<f32> = Vec::with_capacity(total_items);
-    for path in playlist.iter() {
-        let h = match grid.thumbnail_cache.get(path) {
-            Some(ThumbnailEntry::Ready { width, height, .. }) if *width > 0 => {
-                let aspect = *height as f32 / *width as f32;
-                (thumb_w * aspect).min(max_thumb_h)
-            }
-            _ => thumb_w.min(max_thumb_h), // Square placeholder for loading/error/unknown.
-        };
-        item_display_heights.push(h);
-    }
 
     let mut action = PlaylistGridAction::None;
 
@@ -90,8 +76,8 @@ pub fn render(
     // average row height since we can't know exact row heights before layout.
     if let Some(target_idx) = scroll_to_idx {
         let target_row = target_idx / columns;
-        // Estimate each row's height as thumb_w + label_h + spacing_y.
-        let est_row_h = thumb_w + label_h + spacing_y;
+        // Estimate each row's height as max_thumb_h + label_h + spacing_y.
+        let est_row_h = max_thumb_h + label_h + spacing_y;
         let target_y = padding_y + target_row as f32 * est_row_h;
         // Centre the target in the viewport.
         let viewport_h = ui.available_height();
@@ -99,7 +85,7 @@ pub fn render(
         scroll_area = scroll_area.vertical_scroll_offset(scroll_y);
     }
 
-    let scroll_output = scroll_area.show(ui, |ui| {
+    let visible_paths = scroll_area.show(ui, |ui| {
         // Determine the visible Y range for lazy-loading.
         let clip_rect = ui.clip_rect();
 
@@ -113,11 +99,8 @@ pub fn render(
             let row_end = (row_start + columns).min(total_items);
             let items_in_row = row_end.saturating_sub(row_start);
 
-            // Compute row height = tallest item + label.
-            let row_thumb_h = item_display_heights[row_start..row_end]
-                .iter()
-                .cloned()
-                .fold(0.0f32, f32::max);
+            // Compute row height = thumbnail box + label.
+            let row_thumb_h = max_thumb_h;
             let row_h = row_thumb_h + label_h;
 
             // Allocate a rect for this row.
@@ -152,7 +135,17 @@ pub fn render(
                 let path = &playlist[item_idx];
                 visible_paths.push(path.clone());
 
-                let item_thumb_h = item_display_heights[item_idx];
+                let aspect = match grid.thumbnail_cache.get(path) {
+                    Some(ThumbnailEntry::Ready { width, height, .. }) if *width > 0 => {
+                        *height as f32 / *width as f32
+                    }
+                    _ => 1.0,
+                };
+                let (item_thumb_w, item_thumb_h) = if aspect > max_height_ratio {
+                    (max_thumb_h / aspect, max_thumb_h)
+                } else {
+                    (thumb_w, thumb_w * aspect)
+                };
 
                 // Position this item within the row.
                 let x = row_content_rect.min.x + gap_x + col as f32 * (thumb_w + gap_x);
@@ -172,9 +165,10 @@ pub fn render(
                 );
                 // Vertically centre the thumbnail within the row's thumbnail area.
                 let thumb_y_offset = (row_thumb_h - item_thumb_h) / 2.0;
+                let thumb_x_offset = (thumb_w - item_thumb_w) / 2.0;
                 let thumb_rect = egui::Rect::from_min_size(
-                    egui::pos2(x, row_content_rect.min.y + thumb_y_offset),
-                    egui::vec2(thumb_w, item_thumb_h),
+                    egui::pos2(x + thumb_x_offset, row_content_rect.min.y + thumb_y_offset),
+                    egui::vec2(item_thumb_w, item_thumb_h),
                 );
                 let label_rect = egui::Rect::from_min_size(
                     egui::pos2(x, row_content_rect.min.y + row_thumb_h),
@@ -348,12 +342,11 @@ pub fn render(
 
         ui.add_space(padding_y);
 
-        // Lazy-load: request thumbnails for visible items.
-        grid.request_thumbnails_for_paths(&visible_paths);
-    });
+        visible_paths
+    }).inner;
 
-    // Suppress unused variable warning.
-    let _ = scroll_output;
+    // Lazy-load: request thumbnails for visible items.
+    grid.request_thumbnails_for_paths(&visible_paths);
 
     action
 }
