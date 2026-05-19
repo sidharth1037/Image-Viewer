@@ -3,6 +3,7 @@ use egui_phosphor::regular as icons;
 
 use crate::app::ImageApp;
 use crate::groups::{DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME};
+use crate::handlers;
 
 const GROUP_TABS_HEIGHT: f32 = 30.0;
 const TAB_HEIGHT: f32 = 24.0;
@@ -65,6 +66,9 @@ pub fn render_in_rect(app: &mut ImageApp, _ctx: &egui::Context, ui: &mut egui::U
 
         let mut pending_close: Option<u32> = None;
         let mut pending_select: Option<u32> = None;
+        let mut pending_drop: Option<u32> = None;
+        let drag_active = app.group_drag_payload.is_some();
+        let pointer_released = ui.input(|i| i.pointer.any_released());
 
         egui::ScrollArea::horizontal()
             .id_salt("group_tabs_scroll")
@@ -74,6 +78,9 @@ pub fn render_in_rect(app: &mut ImageApp, _ctx: &egui::Context, ui: &mut egui::U
                 ui.horizontal(|ui| {
                     let default_selected = app.workspace.group_tabs.is_selected(DEFAULT_GROUP_ID);
                     let default_action = render_tab(ui, DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME, default_selected, false);
+                    if drag_active && pointer_released && default_action.response.hovered() {
+                        pending_drop = Some(DEFAULT_GROUP_ID);
+                    }
                     if default_action.select_clicked {
                         pending_select = Some(DEFAULT_GROUP_ID);
                     }
@@ -81,6 +88,10 @@ pub fn render_in_rect(app: &mut ImageApp, _ctx: &egui::Context, ui: &mut egui::U
                     for (group_id, group_name) in groups.iter() {
                         let is_selected = app.workspace.group_tabs.is_selected(*group_id);
                         let action = render_tab(ui, *group_id, group_name, is_selected, true);
+
+                        if drag_active && pointer_released && action.response.hovered() {
+                            pending_drop = Some(*group_id);
+                        }
 
                         if action.close_clicked {
                             pending_close = Some(*group_id);
@@ -91,10 +102,13 @@ pub fn render_in_rect(app: &mut ImageApp, _ctx: &egui::Context, ui: &mut egui::U
                 });
             });
 
-        if let Some(group_id) = pending_close {
-            app.workspace.group_tabs.close_group(group_id);
+        if let Some(group_id) = pending_drop {
+            let time = ui.input(|i| i.time);
+            handlers::handle_group_drop(app, group_id, time);
+        } else if let Some(group_id) = pending_close {
+            handlers::close_group_tab(app, group_id);
         } else if let Some(group_id) = pending_select {
-            app.workspace.group_tabs.select_group(group_id);
+            handlers::switch_group(app, group_id);
         }
     });
 
@@ -148,6 +162,7 @@ fn is_visible(app: &ImageApp) -> bool {
 }
 
 struct TabAction {
+    response: egui::Response,
     select_clicked: bool,
     close_clicked: bool,
 }
@@ -239,6 +254,7 @@ fn render_tab(ui: &mut egui::Ui, id: u32, label: &str, selected: bool, closable:
     let select_clicked = response.clicked() && !close_clicked;
 
     TabAction {
+        response,
         select_clicked,
         close_clicked,
     }

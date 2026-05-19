@@ -308,6 +308,11 @@ fn delete_file_shortcut_pressed(
     false
 }
 
+fn is_group_restricted(app: &ImageApp) -> bool {
+    app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid
+        && app.workspace.group_tabs.selected_id != crate::groups::DEFAULT_GROUP_ID
+}
+
 pub fn set_text_filter(app: &mut ImageApp, text: String) {
     if app.workspace.active_view_mut().filter.criteria.text == text {
         return;
@@ -381,6 +386,182 @@ pub fn jump_to_playlist_edge(app: &mut ImageApp, to_last: bool) {
 
 pub fn toggle_settings_window(app: &mut ImageApp) {
     app.show_settings_window = !app.show_settings_window;
+}
+
+fn apply_group_playlist_state(app: &mut ImageApp, state: &crate::groups::GroupPlaylistState) {
+    state.apply_to_view(app.workspace.active_view_mut());
+
+    let playlist_snapshot = app.workspace.active_view().active_playlist.clone();
+    let current_index = app.workspace.active_view().current_index;
+    app.workspace.active_view_mut().preload.on_playlist_updated(
+        &playlist_snapshot,
+        current_index,
+        app.settings.loop_playlist,
+        None,
+    );
+
+    if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+        grid.selection.clear();
+        grid.refresh_total_size_cache(&playlist_snapshot);
+        if playlist_snapshot.is_empty() {
+            grid.scroll_to_index = None;
+        } else {
+            grid.scroll_to_index = Some(current_index);
+        }
+    }
+}
+
+pub fn switch_group(app: &mut ImageApp, group_id: u32) {
+    let current_group_id = app.workspace.group_tabs.selected_id;
+    if current_group_id == group_id {
+        return;
+    }
+
+    let current_state = crate::groups::GroupPlaylistState::from_view(app.workspace.active_view());
+    app.workspace
+        .group_tabs
+        .set_group_playlist(current_group_id, current_state);
+
+    app.workspace.group_tabs.ensure_group_playlist(group_id);
+    app.workspace.group_tabs.select_group(group_id);
+
+    let next_state = app
+        .workspace
+        .group_tabs
+        .group_playlist(group_id)
+        .cloned()
+        .unwrap_or_else(crate::groups::GroupPlaylistState::new);
+
+    apply_group_playlist_state(app, &next_state);
+}
+
+pub fn close_group_tab(app: &mut ImageApp, group_id: u32) {
+    let was_active = app.workspace.group_tabs.selected_id == group_id;
+
+    app.workspace.group_tabs.close_group(group_id);
+
+    if !was_active {
+        return;
+    }
+
+    let next_id = app.workspace.group_tabs.selected_id;
+    app.workspace.group_tabs.ensure_group_playlist(next_id);
+
+    let next_state = app
+        .workspace
+        .group_tabs
+        .group_playlist(next_id)
+        .cloned()
+        .unwrap_or_else(crate::groups::GroupPlaylistState::new);
+
+    apply_group_playlist_state(app, &next_state);
+}
+
+pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
+    let Some(payload) = app.group_drag_payload.take() else {
+        return;
+    };
+
+    let source_group_id = payload.source_group_id;
+    if source_group_id == target_group_id {
+        return;
+    }
+
+    let active_group_id = app.workspace.group_tabs.selected_id;
+    let mut updated: std::collections::HashMap<u32, crate::groups::GroupPlaylistState> =
+        std::collections::HashMap::new();
+
+    fn load_group_state(
+        app: &ImageApp,
+        updated: &std::collections::HashMap<u32, crate::groups::GroupPlaylistState>,
+        active_group_id: u32,
+        group_id: u32,
+    ) -> crate::groups::GroupPlaylistState {
+        if let Some(state) = updated.get(&group_id) {
+            return state.clone();
+        }
+        if group_id == active_group_id {
+            return crate::groups::GroupPlaylistState::from_view(app.workspace.active_view());
+        }
+        app.workspace
+            .group_tabs
+            .group_playlist(group_id)
+            .cloned()
+            .unwrap_or_else(crate::groups::GroupPlaylistState::new)
+    }
+
+    let user_group_ids: Vec<u32> = app
+        .workspace
+        .group_tabs
+        .user_groups
+        .iter()
+        .map(|group| group.id)
+        .collect();
+
+    let source_is_default = source_group_id == crate::groups::DEFAULT_GROUP_ID;
+    let target_is_default = target_group_id == crate::groups::DEFAULT_GROUP_ID;
+
+    if source_is_default && !target_is_default {
+        for group_id in user_group_ids.iter().copied().filter(|id| *id != target_group_id) {
+            let state = load_group_state(app, &updated, active_group_id, group_id);
+            let duplicate_count = payload
+                .paths
+                .iter()
+                .filter(|path| state.source_playlist.iter().any(|existing| existing == *path))
+                .count();
+
+            if duplicate_count > 0 {
+                let label = if duplicate_count == 1 { "Item" } else { "Items" };
+                let message = format!("{} already exist in Group {}", label, group_id);
+                app.notifications.show(time, message);
+                return;
+            }
+        }
+    }
+
+    if !target_is_default {
+        app.workspace.group_tabs.ensure_group_playlist(target_group_id);
+        let mut target_state = load_group_state(app, &updated, active_group_id, target_group_id);
+
+        let added = target_state.add_items(&payload.paths);
+        if added > 0 {
+            target_state.rebuild_active_playlist();
+        }
+
+        updated.insert(target_group_id, target_state);
+    }
+
+    let groups_to_clear: Vec<u32> = if source_is_default {
+        Vec::new()
+    } else if target_is_default {
+        user_group_ids
+    } else {
+        user_group_ids
+            .into_iter()
+            .filter(|id| *id != target_group_id)
+            .collect()
+    };
+
+    for group_id in groups_to_clear {
+        let mut state = load_group_state(app, &updated, active_group_id, group_id);
+        if state.remove_items(&payload.paths) > 0 {
+            state.rebuild_active_playlist();
+            updated.insert(group_id, state);
+        }
+    }
+
+    let mut active_state: Option<crate::groups::GroupPlaylistState> = None;
+    for (group_id, state) in updated.into_iter() {
+        if group_id == active_group_id {
+            active_state = Some(state.clone());
+        }
+        app.workspace.group_tabs.set_group_playlist(group_id, state);
+    }
+
+    if let Some(state) = active_state {
+        apply_group_playlist_state(app, &state);
+    }
+
 }
 
 /// Queues both image loading and directory scanning through the same runtime paths.
@@ -1364,13 +1545,42 @@ pub fn process_directory_scanning(app: &mut ImageApp) {
             }
             app.workspace.views[i].scanning_in_progress = false;
             app.workspace.views[i].current_folder = Some(scan.folder_path.clone());
+
+            let is_active_view = i == app.workspace.active_view_index;
+            let default_selected = app.workspace.group_tabs.selected_id == crate::groups::DEFAULT_GROUP_ID;
+
+            if is_active_view && !default_selected {
+                app.workspace
+                    .group_tabs
+                    .ensure_group_playlist(crate::groups::DEFAULT_GROUP_ID);
+                if let Some(state) = app
+                    .workspace
+                    .group_tabs
+                    .group_playlist_mut(crate::groups::DEFAULT_GROUP_ID)
+                {
+                    state.source_playlist = scan.playlist.clone();
+                    state.rebuild_active_playlist();
+                }
+                continue;
+            }
+
             app.workspace.views[i].source_playlist = scan.playlist.clone();
             rebuild_active_playlist_and_reconcile_current(app, i);
+
+            if is_active_view && default_selected {
+                let updated = crate::groups::GroupPlaylistState::from_view(&app.workspace.views[i]);
+                app.workspace
+                    .group_tabs
+                    .set_group_playlist(crate::groups::DEFAULT_GROUP_ID, updated);
+            }
         }
     }
 }
 
 pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
+    if is_group_restricted(app) {
+        return;
+    }
     if app.show_delete_file_dialog {
         return;
     }
@@ -1426,6 +1636,9 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
 }
 
 pub fn handle_browse_file_request(app: &mut ImageApp) {
+    if is_group_restricted(app) {
+        return;
+    }
     // Check all views, not just the active one, in case a split pane triggered it.
     let mut requested_view_index = None;
     for (i, view) in app.workspace.views.iter_mut().enumerate() {
@@ -1603,6 +1816,9 @@ pub fn open_folder(app: &mut ImageApp, ctx: &egui::Context, folder_path: std::pa
 
 /// Handle the "Open Folder" button / browse-folder request.
 pub fn handle_browse_folder_request(app: &mut ImageApp, ctx: &egui::Context) {
+    if is_group_restricted(app) {
+        return;
+    }
     let mut requested = false;
     for view in app.workspace.views.iter_mut() {
         if view.browse_folder_requested {

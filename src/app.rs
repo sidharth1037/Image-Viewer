@@ -68,6 +68,8 @@ pub struct ImageApp {
     pub prev_pixel_based_1_to_1: bool,
     pub immersive_topbar_visible: bool,
     pub immersive_bottombar_visible: bool,
+    pub group_drag_payload: Option<crate::groups::GroupDragPayload>,
+    pub notifications: crate::notifications::NotificationToast,
     startup_open_target: Option<std::path::PathBuf>,
 }
 
@@ -151,6 +153,8 @@ impl ImageApp {
             prev_pixel_based_1_to_1,
             immersive_topbar_visible: false,
             immersive_bottombar_visible: false,
+            group_drag_payload: None,
+            notifications: crate::notifications::NotificationToast::new(),
             startup_open_target: initial_file.map(std::path::PathBuf::from),
         };
 
@@ -206,6 +210,8 @@ impl eframe::App for ImageApp {
         let is_playlist_grid = self.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
 
         ui::bottom_bar::render(self, ctx);
+        ui::notification_toast::render(self, ctx);
+        ui::drag_preview::render(self, ctx);
 
         if is_playlist_grid {
             let recursive_scan_enabled = self.workspace.active_view().recursive_scan_enabled;

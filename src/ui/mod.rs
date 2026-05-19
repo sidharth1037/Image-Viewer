@@ -11,3 +11,5 @@ pub mod sort_controls;
 pub mod dialogs;
 pub mod playlist_grid;
 pub mod group_tabs;
+pub mod notification_toast;
+pub mod drag_preview;

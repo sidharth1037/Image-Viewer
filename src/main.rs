@@ -14,6 +14,7 @@ mod playlist_grid;
 mod shortcuts;
 mod persistence;
 mod groups;
+mod notifications;
 mod ui;
 mod handlers;
 mod workspace;

@@ -1,6 +1,7 @@
 use eframe::egui;
 use crate::app::ImageApp;
 use crate::playlist_grid::ThumbnailEntry;
+use crate::groups::GroupDragPayload;
 
 /// Actions the grid can produce for the main update loop to handle.
 pub enum PlaylistGridAction {
@@ -38,6 +39,12 @@ pub fn render(
             ctx.request_repaint();
             return render_scanning_folder(ui);
         }
+
+        let is_default_group = app.workspace.group_tabs.selected_id == crate::groups::DEFAULT_GROUP_ID;
+        if !is_default_group {
+            return render_empty_group(ui);
+        }
+
         let filter_text = active_view.filter.criteria.text.trim();
         if !filter_text.is_empty() && !active_view.source_playlist.is_empty() {
             return render_empty_filter(ui, filter_text);
@@ -186,7 +193,7 @@ pub fn render(
 
                 // Interaction sensing.
                 let item_id = egui::Id::new(("grid_item", item_idx));
-                let response = ui.interact(full_item_rect, item_id, egui::Sense::click());
+                let response = ui.interact(full_item_rect, item_id, egui::Sense::click_and_drag());
 
                 // Selection highlight.
                 let is_selected = grid.selection.is_selected(item_idx);
@@ -339,6 +346,27 @@ pub fn render(
                     grid.refresh_selected_size_cache(playlist);
                 }
 
+                if app.settings.groups_enabled && response.drag_started() {
+                    if !grid.selection.is_selected(item_idx) {
+                        grid.selection.select_single(item_idx);
+                        grid.refresh_selected_size_cache(playlist);
+                    }
+
+                    let selected_paths: Vec<std::path::PathBuf> = grid
+                        .selection
+                        .selected
+                        .iter()
+                        .filter_map(|index| playlist.get(*index).cloned())
+                        .collect();
+
+                    if !selected_paths.is_empty() {
+                        app.group_drag_payload = Some(GroupDragPayload {
+                            source_group_id: app.workspace.group_tabs.selected_id,
+                            paths: selected_paths,
+                        });
+                    }
+                }
+
                 if response.hovered() {
                     ctx.set_cursor_icon(egui::CursorIcon::Default);
                 }
@@ -352,6 +380,10 @@ pub fn render(
 
     // Lazy-load: request thumbnails for visible items.
     grid.request_thumbnails_for_paths(&visible_paths);
+
+    if app.group_drag_payload.is_some() && ctx.input(|i| i.pointer.any_released()) {
+        app.group_drag_payload = None;
+    }
 
     action
 }
@@ -444,6 +476,26 @@ fn render_empty_filter(ui: &mut egui::Ui, filter_text: &str) -> PlaylistGridActi
         filter_text
     );
     group_ui.add(egui::Label::new(message).selectable(false));
+
+    PlaylistGridAction::None
+}
+
+fn render_empty_group(ui: &mut egui::Ui) -> PlaylistGridAction {
+    let area_rect = ui.max_rect();
+    let mut group_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(area_rect)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+    );
+
+    let content_height = 60.0;
+    let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+    group_ui.add_space(top_padding);
+
+    group_ui.add(
+        egui::Label::new("Empty group.\nAdd items from the Default group to populate it.")
+            .selectable(false),
+    );
 
     PlaylistGridAction::None
 }
