@@ -457,14 +457,71 @@ pub fn close_group_tab(app: &mut ImageApp, group_id: u32) {
     apply_group_playlist_state(app, &next_state);
 }
 
-pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
-    let Some(payload) = app.group_drag_payload.take() else {
+fn resolve_group_assign_target(app: &mut ImageApp) -> crate::groups::GroupAssignTarget {
+    match app.group_assign_target {
+        crate::groups::GroupAssignTarget::Group(id) if app.workspace.group_tabs.has_group(id) => {
+            app.group_assign_target
+        }
+        _ => {
+            app.group_assign_target = crate::groups::GroupAssignTarget::AskEveryTime;
+            app.group_assign_target
+        }
+    }
+}
+
+fn open_group_assign_prompt(app: &mut ImageApp, path: std::path::PathBuf) {
+    app.show_group_assign_prompt = true;
+    app.group_assign_prompt_path = Some(path);
+    app.group_assign_prompt_source_group = app.workspace.group_tabs.selected_id;
+}
+
+fn close_group_assign_prompt(app: &mut ImageApp) {
+    app.show_group_assign_prompt = false;
+    app.group_assign_prompt_path = None;
+}
+
+pub fn apply_group_assign_prompt(app: &mut ImageApp, target_group_id: u32, time: f64) {
+    let Some(path) = app.group_assign_prompt_path.clone() else {
+        close_group_assign_prompt(app);
         return;
     };
 
-    let source_group_id = payload.source_group_id;
-    if source_group_id == target_group_id {
+    let source_group_id = app.group_assign_prompt_source_group;
+    let paths = vec![path];
+    transfer_items_between_groups(app, source_group_id, target_group_id, &paths, time);
+    close_group_assign_prompt(app);
+}
+
+pub fn handle_add_to_group_shortcut(app: &mut ImageApp, time: f64) {
+    if !app.settings.groups_enabled {
         return;
+    }
+
+    let Some(path) = app.workspace.active_view().current_file_path.clone() else {
+        return;
+    };
+
+    match resolve_group_assign_target(app) {
+        crate::groups::GroupAssignTarget::AskEveryTime => {
+            open_group_assign_prompt(app, path);
+        }
+        crate::groups::GroupAssignTarget::Group(target_group_id) => {
+            let source_group_id = app.workspace.group_tabs.selected_id;
+            let paths = vec![path];
+            transfer_items_between_groups(app, source_group_id, target_group_id, &paths, time);
+        }
+    }
+}
+
+fn transfer_items_between_groups(
+    app: &mut ImageApp,
+    source_group_id: u32,
+    target_group_id: u32,
+    paths: &[std::path::PathBuf],
+    time: f64,
+) -> bool {
+    if source_group_id == target_group_id || paths.is_empty() {
+        return false;
     }
 
     let active_group_id = app.workspace.group_tabs.selected_id;
@@ -504,8 +561,7 @@ pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
     if source_is_default && !target_is_default {
         for group_id in user_group_ids.iter().copied().filter(|id| *id != target_group_id) {
             let state = load_group_state(app, &updated, active_group_id, group_id);
-            let duplicate_count = payload
-                .paths
+            let duplicate_count = paths
                 .iter()
                 .filter(|path| state.source_playlist.iter().any(|existing| existing == *path))
                 .count();
@@ -514,7 +570,7 @@ pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
                 let label = if duplicate_count == 1 { "Item" } else { "Items" };
                 let message = format!("{} already exist in Group {}", label, group_id);
                 app.notifications.show(time, message);
-                return;
+                return false;
             }
         }
     }
@@ -523,7 +579,7 @@ pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
         app.workspace.group_tabs.ensure_group_playlist(target_group_id);
         let mut target_state = load_group_state(app, &updated, active_group_id, target_group_id);
 
-        let added = target_state.add_items(&payload.paths);
+        let added = target_state.add_items(paths);
         if added > 0 {
             target_state.rebuild_active_playlist();
         }
@@ -544,7 +600,7 @@ pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
 
     for group_id in groups_to_clear {
         let mut state = load_group_state(app, &updated, active_group_id, group_id);
-        if state.remove_items(&payload.paths) > 0 {
+        if state.remove_items(paths) > 0 {
             state.rebuild_active_playlist();
             updated.insert(group_id, state);
         }
@@ -561,6 +617,22 @@ pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
     if let Some(state) = active_state {
         apply_group_playlist_state(app, &state);
     }
+
+    true
+}
+
+pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
+    let Some(payload) = app.group_drag_payload.take() else {
+        return;
+    };
+
+    transfer_items_between_groups(
+        app,
+        payload.source_group_id,
+        target_group_id,
+        &payload.paths,
+        time,
+    );
 
 }
 
@@ -976,6 +1048,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.show_original_hold.is_held(i),
             shortcuts.clear_active_view.is_pressed(i),
             shortcuts.return_to_playlist.is_pressed(i),
+            shortcuts.add_to_group.is_pressed(i),
         )
     });
 
@@ -1015,6 +1088,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         show_original_hold,
         clear_view,
         return_to_playlist_pressed,
+        add_to_group,
     ) = input;
 
     let is_playlist_grid = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
@@ -1109,6 +1183,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             return_to_playlist_view(app);
             return;
         }
+    }
+
+    if add_to_group {
+        handle_add_to_group_shortcut(app, time);
+        return;
     }
 
     if app.bottom_bar_scale_editing || app.bottom_bar_index_editing {

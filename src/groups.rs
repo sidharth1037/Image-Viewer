@@ -3,6 +3,19 @@ use std::path::PathBuf;
 
 pub const DEFAULT_GROUP_ID: u32 = 0;
 pub const DEFAULT_GROUP_NAME: &str = "Default";
+pub const ASK_EVERY_TIME_LABEL: &str = "Ask every time";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupAssignTarget {
+    AskEveryTime,
+    Group(u32),
+}
+
+impl Default for GroupAssignTarget {
+    fn default() -> Self {
+        Self::AskEveryTime
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct GroupTab {
@@ -160,6 +173,23 @@ impl GroupTabsState {
 
     pub fn is_selected(&self, id: u32) -> bool {
         self.selected_id == id
+    }
+
+    pub fn has_group(&self, id: u32) -> bool {
+        if id == DEFAULT_GROUP_ID {
+            return true;
+        }
+        self.user_groups.iter().any(|group| group.id == id)
+    }
+
+    pub fn group_name(&self, id: u32) -> Option<String> {
+        if id == DEFAULT_GROUP_ID {
+            return Some(DEFAULT_GROUP_NAME.to_string());
+        }
+        self.user_groups
+            .iter()
+            .find(|group| group.id == id)
+            .map(|group| group.name.clone())
     }
 
     pub fn ensure_group_playlist(&mut self, id: u32) {

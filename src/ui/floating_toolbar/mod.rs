@@ -42,6 +42,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context, _active_canvas_rect: egui
                         // --- toolbar items ---
                         items::render_carry_adjustments_toggle(app, ui);
                         items::render_split_pan_zoom_sync_toggle(app, ui);
+                        items::render_group_assign_dropdown(app, ctx, ui);
                         // Future items go here.
                     });
                 });

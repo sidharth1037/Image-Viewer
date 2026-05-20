@@ -1,6 +1,7 @@
 use eframe::egui::{self};
 use crate::app::ImageApp;
 use crate::ui::sort_controls;
+use crate::ui::menu_helpers;
 use egui_phosphor::regular as icons;
 
 const EDGE_TRIGGER_HEIGHT: f32 = 34.0;
@@ -122,37 +123,6 @@ fn resolve_topbar_layout(available_width: f32) -> TopbarLayoutDecision {
 
 fn response_contains(response: Option<&egui::Response>, pos: egui::Pos2) -> bool {
     response.is_some_and(|res| res.rect.contains(pos))
-}
-
-fn padded_left_row_button(ui: &mut egui::Ui, label: &str, tooltip: &str, selected: bool) -> bool {
-    const H_PADDING: f32 = 10.0;
-
-    let row_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
-    let (rect, response) = ui.allocate_exact_size(row_size, egui::Sense::click());
-    let response = response.on_hover_text(tooltip);
-
-    if ui.is_rect_visible(rect) {
-        let visuals = &ui.style().visuals;
-        let widget = if selected {
-            &visuals.widgets.active
-        } else if response.hovered() {
-            &visuals.widgets.hovered
-        } else {
-            &visuals.widgets.inactive
-        };
-
-        ui.painter().rect_filled(rect, widget.corner_radius, widget.bg_fill);
-
-        ui.painter().text(
-            egui::pos2(rect.left() + H_PADDING, rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::TextStyle::Button.resolve(ui.style()),
-            widget.fg_stroke.color,
-        );
-    }
-
-    response.clicked()
 }
 
 fn tooltip_with_shortcut(label: &str, shortcut: &str) -> String {
@@ -541,7 +511,7 @@ fn render_content(app: &mut ImageApp, ui: &mut egui::Ui, ctx: &egui::Context) {
                             for option in sort_controls::SORT_OPTIONS {
                                 let is_selected = app.workspace.active_view().sort_method == option.method;
                                 let label = sort_controls::popup_item_label(option.method);
-                                let changed = padded_left_row_button(
+                                let changed = menu_helpers::menu_row_button(
                                     ui,
                                     &label,
                                     &tooltip_with_shortcut("Set sorting type", "No shortcut"),

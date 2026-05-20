@@ -58,6 +58,12 @@ pub struct ImageApp {
     pub delete_file_dialog_target: Option<std::path::PathBuf>,
     pub delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection,
     pub show_save_overwrite_dialog: bool,
+    pub show_group_assign_menu: bool,
+    pub group_assign_menu_pos: Option<egui::Pos2>,
+    pub show_group_assign_prompt: bool,
+    pub group_assign_prompt_path: Option<std::path::PathBuf>,
+    pub group_assign_prompt_source_group: u32,
+    pub group_assign_target: crate::groups::GroupAssignTarget,
     pub bottom_bar_scale_editing: bool,
     pub bottom_bar_scale_input: String,
     pub bottom_bar_scale_focus_pending: bool,
@@ -143,6 +149,12 @@ impl ImageApp {
             delete_file_dialog_target: None,
             delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection::Confirm,
             show_save_overwrite_dialog: false,
+            show_group_assign_menu: false,
+            group_assign_menu_pos: None,
+            show_group_assign_prompt: false,
+            group_assign_prompt_path: None,
+            group_assign_prompt_source_group: crate::groups::DEFAULT_GROUP_ID,
+            group_assign_target: crate::groups::GroupAssignTarget::default(),
             bottom_bar_scale_editing: false,
             bottom_bar_scale_input: String::new(),
             bottom_bar_scale_focus_pending: false,
@@ -185,6 +197,7 @@ impl eframe::App for ImageApp {
         ui::topbar::render(self, ctx);
         ui::filter_popup::render(self, ctx);
         ui::settings::render(self, ctx);
+        ui::group_assign_prompt::render(self, ctx);
 
         if self.prev_pixel_based_1_to_1 != self.settings.pixel_based_1_to_1 {
             for state in &mut self.workspace.views {
