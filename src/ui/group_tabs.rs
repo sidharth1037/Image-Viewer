@@ -77,7 +77,14 @@ pub fn render_in_rect(app: &mut ImageApp, _ctx: &egui::Context, ui: &mut egui::U
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let default_selected = app.workspace.group_tabs.is_selected(DEFAULT_GROUP_ID);
-                    let default_action = render_tab(ui, DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME, default_selected, false);
+                    let default_action = render_tab(
+                        ui,
+                        DEFAULT_GROUP_ID,
+                        DEFAULT_GROUP_NAME,
+                        default_selected,
+                        false,
+                        drag_active,
+                    );
                     if drag_active && pointer_released && default_action.response.hovered() {
                         pending_drop = Some(DEFAULT_GROUP_ID);
                     }
@@ -87,7 +94,14 @@ pub fn render_in_rect(app: &mut ImageApp, _ctx: &egui::Context, ui: &mut egui::U
 
                     for (group_id, group_name) in groups.iter() {
                         let is_selected = app.workspace.group_tabs.is_selected(*group_id);
-                        let action = render_tab(ui, *group_id, group_name, is_selected, true);
+                        let action = render_tab(
+                            ui,
+                            *group_id,
+                            group_name,
+                            is_selected,
+                            true,
+                            drag_active,
+                        );
 
                         if drag_active && pointer_released && action.response.hovered() {
                             pending_drop = Some(*group_id);
@@ -167,7 +181,14 @@ struct TabAction {
     close_clicked: bool,
 }
 
-fn render_tab(ui: &mut egui::Ui, id: u32, label: &str, selected: bool, closable: bool) -> TabAction {
+fn render_tab(
+    ui: &mut egui::Ui,
+    id: u32,
+    label: &str,
+    selected: bool,
+    closable: bool,
+    drag_active: bool,
+) -> TabAction {
     let font_id = egui::TextStyle::Button.resolve(ui.style());
     let label_size = ui
         .painter()
@@ -184,34 +205,35 @@ fn render_tab(ui: &mut egui::Ui, id: u32, label: &str, selected: bool, closable:
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, TAB_HEIGHT), egui::Sense::click());
 
     let visuals = ui.style().visuals.clone();
-    let (bg_fill, bg_stroke, fg_color) = if selected {
+    let is_drop_target = drag_active && ui.input(|i| i.pointer.hover_pos().is_some_and(|pos| rect.contains(pos)));
+
+    let (bg_fill, fg_color) = if selected {
         (
-            visuals.widgets.active.bg_fill,
-            visuals.widgets.active.bg_stroke,
+            visuals.selection.bg_fill,
             visuals.widgets.active.fg_stroke.color,
         )
     } else if response.hovered() {
         (
             visuals.widgets.hovered.bg_fill,
-            visuals.widgets.hovered.bg_stroke,
             visuals.widgets.hovered.fg_stroke.color,
         )
     } else {
         (
             visuals.widgets.inactive.bg_fill,
-            visuals.widgets.inactive.bg_stroke,
             visuals.widgets.inactive.fg_stroke.color,
         )
     };
 
+    let mut stroke = visuals.widgets.inactive.bg_stroke;
+    if is_drop_target {
+        stroke = visuals.selection.stroke;
+        stroke.color = stroke.color.gamma_multiply(0.85);
+    }
+
     ui.painter()
         .rect_filled(rect, TAB_CORNER_RADIUS, bg_fill);
-    ui.painter().rect_stroke(
-        rect,
-        TAB_CORNER_RADIUS,
-        bg_stroke,
-        egui::StrokeKind::Inside,
-    );
+    ui.painter()
+        .rect_stroke(rect, TAB_CORNER_RADIUS, stroke, egui::StrokeKind::Inside);
 
     let text_pos = egui::pos2(
         rect.min.x + TAB_PADDING_X,
