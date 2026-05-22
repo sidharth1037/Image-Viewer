@@ -1845,54 +1845,82 @@ pub fn handle_drag_and_drop(app: &mut ImageApp, ctx: &egui::Context) {
         return;
     }
 
-    ctx.input(|i| {
-        if let Some(dropped_file) = i.raw.dropped_files.first() {
-            if let Some(path) = &dropped_file.path {
-                let same_target = app
-                    .workspace.active_view()
-                    .current_file_path
-                    .as_ref()
-                    .is_some_and(|current| current == path);
-
-                let same_directory = path
-                    .parent()
-                    .and_then(|parent| app.workspace.active_view().current_folder.as_ref().map(|folder| folder.as_path() == parent))
-                    .unwrap_or(false);
-
-                // Ignore self-drops of the currently loaded file to avoid unnecessary reloads
-                // that reset zoom/pan state and trigger a full refresh pipeline.
-                if same_target && same_directory {
-                    return;
-                }
-
-                app.workspace.active_view_mut().preload.on_new_open();
-                let mut should_scan = false;
-                
-                if let Some(parent) = path.parent() {
-                    if Some(parent.to_path_buf()) == app.workspace.active_view_mut().current_folder {
-                        if let Some(idx) = app.workspace.active_view_mut().active_playlist.iter().position(|p| p == path) {
-                            app.workspace.active_view_mut().current_index = idx;
-                        } else {
-                            should_scan = true;
-                        }
-                    } else {
-                        // --- THE FIX: PREVENT ASYNC RACE CONDITIONS ---
-                        // Immediately invalidate the old folder's state
-                        app.workspace.active_view_mut().current_folder = Some(parent.to_path_buf());
-                        app.workspace.active_view_mut().source_playlist.clear();
-                        app.workspace.active_view_mut().active_playlist.clear();
-                        app.workspace.active_view_mut().current_index = 0;
-                        should_scan = true;
-                    }
-                }
-
-                load_target_file(app, path.clone());
-                if should_scan {
-                    request_directory_scan(app, path.clone());
-                }
-            }
-        }
+    // We need to call open_folder outside the ctx.input closure (it borrows ctx
+    // mutably), so collect the dropped path first.
+    let dropped_path = ctx.input(|i| {
+        i.raw.dropped_files.first().and_then(|f| f.path.clone())
     });
+
+    let Some(path) = dropped_path else {
+        return;
+    };
+
+    // --- Dropped a folder: open it in playlist-grid mode. ---
+    if path.is_dir() {
+        open_folder(app, ctx, path);
+        return;
+    }
+
+    // --- Dropped a file: open in canvas mode and set up the grid so Esc works. ---
+
+    // Ignore self-drops of the currently loaded file.
+    let same_target = app
+        .workspace
+        .active_view()
+        .current_file_path
+        .as_ref()
+        .is_some_and(|current| current == &path);
+
+    let parent_folder = path.parent().map(|p| p.to_path_buf());
+
+    let same_directory = parent_folder.as_ref().and_then(|parent| {
+        app.workspace
+            .active_view()
+            .current_folder
+            .as_ref()
+            .map(|folder| folder.as_path() == parent.as_path())
+    }).unwrap_or(false);
+
+    if same_target && same_directory {
+        return;
+    }
+
+    let new_folder = parent_folder.as_ref().map_or(true, |parent| {
+        app.workspace
+            .active_view()
+            .current_folder
+            .as_ref()
+            .map_or(true, |current| current.as_path() != parent.as_path())
+    });
+
+    // Switch to canvas mode.
+    app.workspace.content_mode = crate::workspace::ContentMode::Canvas;
+
+    // Always ensure the playlist grid exists so Esc → folder view works.
+    if app.workspace.playlist_grid.is_none() {
+        app.workspace.playlist_grid = Some(crate::playlist_grid::PlaylistGridState::new(ctx));
+    }
+
+    if new_folder {
+        // New parent directory: reset groups and grid, update folder.
+        app.workspace.group_tabs.reset_for_new_folder();
+        if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+            grid.clear_for_new_folder();
+        }
+
+        if let Some(ref parent) = parent_folder {
+            app.workspace.active_view_mut().current_folder = Some(parent.clone());
+        }
+        app.workspace.active_view_mut().source_playlist.clear();
+        app.workspace.active_view_mut().active_playlist.clear();
+        app.workspace.active_view_mut().current_index = 0;
+    }
+
+    app.workspace.active_view_mut().preload.on_new_open();
+    load_target_file(app, path.clone());
+    request_directory_scan(app, path);
+
+    app.cached_title.clear();
 }
 
 pub fn handle_browse_file_request(app: &mut ImageApp) {
