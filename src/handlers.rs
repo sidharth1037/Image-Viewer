@@ -188,6 +188,7 @@ pub fn open_delete_file_dialog(app: &mut ImageApp, time: f64) {
 pub fn cancel_delete_file_dialog(app: &mut ImageApp) {
     app.show_delete_file_dialog = false;
     app.delete_file_dialog_target = None;
+    app.delete_file_dialog_targets.clear();
     app.delete_file_dialog_selection = ConfirmationSelection::Confirm;
 }
 
@@ -213,6 +214,173 @@ pub fn confirm_delete_file_dialog(app: &mut ImageApp, time: f64) {
             set_overlay_message(app, time, &text);
         }
     }
+}
+
+/// Open the permanent-delete confirmation dialog for the current grid selection.
+/// Works for both the Default group and user-created groups.
+pub fn open_delete_file_dialog_for_selection(app: &mut ImageApp, time: f64) {
+    // Collect selected indices first (clone to release the borrow before we
+    // reach the mutable parts of this function).
+    let (selected_indices, playlist_snapshot): (Vec<usize>, Vec<std::path::PathBuf>) = {
+        let grid = match app.workspace.playlist_grid.as_ref() {
+            Some(g) => g,
+            None => {
+                set_overlay_message(app, time, "Shortcut: No files selected");
+                return;
+            }
+        };
+
+        if grid.selection.selected.is_empty() {
+            set_overlay_message(app, time, "Shortcut: No files selected");
+            return;
+        }
+
+        let indices: Vec<usize> = grid.selection.selected.iter().copied().collect();
+        let playlist = app.workspace.active_view().active_playlist.clone();
+        (indices, playlist)
+    };
+
+    let selected_paths: Vec<std::path::PathBuf> = selected_indices
+        .iter()
+        .filter_map(|idx| playlist_snapshot.get(*idx).cloned())
+        .collect();
+
+    if selected_paths.is_empty() {
+        set_overlay_message(app, time, "Shortcut: No files selected");
+        return;
+    }
+
+    close_filter_popup(app);
+    app.show_sort_menu = false;
+    app.sort_menu_pos = None;
+
+    app.show_delete_file_dialog = true;
+    app.delete_file_dialog_targets = selected_paths.clone();
+    // Also set the single-target field so the dialog falls back correctly for
+    // the single-file case (len == 1).
+    app.delete_file_dialog_target = selected_paths.into_iter().next();
+    app.delete_file_dialog_selection = ConfirmationSelection::Confirm;
+}
+
+/// Confirm permanent deletion for the playlist/group view.
+/// Deletes all files listed in `delete_file_dialog_targets` from disk and
+/// removes them from every group playlist, then refreshes the active view.
+pub fn confirm_delete_file_dialog_playlist(app: &mut ImageApp, time: f64) {
+    let targets = app.delete_file_dialog_targets.clone();
+    cancel_delete_file_dialog(app);
+
+    if targets.is_empty() {
+        return;
+    }
+
+    // 1. Delete all target files from disk.
+    let mut deleted: Vec<std::path::PathBuf> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+
+    for path in &targets {
+        match std::fs::remove_file(path) {
+            Ok(()) => deleted.push(path.clone()),
+            Err(e) => failed.push(format!("{}: {}", path.display(), e)),
+        }
+    }
+
+    if deleted.is_empty() {
+        let text = format!("Delete failed: {}", failed.join(", "));
+        set_overlay_message(app, time, &text);
+        return;
+    }
+
+    let active_group_id = app.workspace.group_tabs.selected_id;
+
+    // 2. Before patching stored group states, snapshot the current active view
+    //    state (including the current user-group playlist) and save it into the
+    //    group_tabs store so the loop below operates on fully up-to-date data.
+    {
+        let current_view_state =
+            crate::groups::GroupPlaylistState::from_view(app.workspace.active_view());
+        app.workspace
+            .group_tabs
+            .set_group_playlist(active_group_id, current_view_state);
+    }
+
+    // 3. Patch every group's stored playlist — remove deleted paths from source
+    //    and rebuild the active playlist for each affected group.
+    let all_group_ids: Vec<u32> = {
+        let mut ids = vec![crate::groups::DEFAULT_GROUP_ID];
+        ids.extend(app.workspace.group_tabs.user_groups.iter().map(|g| g.id));
+        ids
+    };
+
+    for group_id in &all_group_ids {
+        if let Some(state) = app.workspace.group_tabs.group_playlist_mut(*group_id) {
+            let before = state.source_playlist.len();
+            state.source_playlist.retain(|p| !deleted.iter().any(|d| d == p));
+            if state.source_playlist.len() != before {
+                state.rebuild_active_playlist();
+            }
+        }
+    }
+
+    // 4. Re-apply the patched active group state to the live view so the grid
+    //    reflects the deletions immediately.
+    if let Some(patched_state) = app
+        .workspace
+        .group_tabs
+        .group_playlist(active_group_id)
+        .cloned()
+    {
+        apply_group_playlist_state(app, &patched_state);
+    }
+
+    // 5. Evict deleted paths from the thumbnail cache so they don't linger
+    //    as stale entries when switching groups.
+    {
+        let playlist_snapshot = app.workspace.active_view().active_playlist.clone();
+        if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+            for path in &deleted {
+                grid.thumbnail_cache.remove(path);
+                grid.pending_requests.remove(path);
+            }
+            // Selection was already cleared by apply_group_playlist_state above;
+            // refresh the size totals with the updated playlist.
+            grid.refresh_total_size_cache(&playlist_snapshot);
+        }
+    }
+
+    // 6. For the default group, trigger a directory rescan so that the source
+    //    playlist is authoritative from disk again (the scan handler also keeps
+    //    the DEFAULT group store in sync). For user groups, the scan result is
+    //    intentionally not applied to the active view by process_directory_scanning,
+    //    so it would only serve to update the DEFAULT group store — which we
+    //    already patched in step 3.
+    let is_default_group = active_group_id == crate::groups::DEFAULT_GROUP_ID;
+    if is_default_group {
+        if let Some(scan_target) = app
+            .workspace
+            .active_view()
+            .current_folder
+            .clone()
+            .map(|folder| folder.join("__delete_refresh__"))
+        {
+            request_directory_scan(app, scan_target);
+        }
+    }
+
+    // 7. Overlay message.
+    let text = if failed.is_empty() {
+        if deleted.len() == 1 {
+            let name = deleted[0]
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| deleted[0].to_string_lossy().into_owned());
+            format!("Deleted {}", name)
+        } else {
+            format!("Deleted {} files", deleted.len())
+        }
+    } else {
+        format!("Deleted {}, {} failed", deleted.len(), failed.len())
+    };
+    set_overlay_message(app, time, &text);
 }
 
 pub fn open_save_overwrite_dialog(app: &mut ImageApp, time: f64) {
@@ -275,9 +443,17 @@ fn handle_delete_file_dialog_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     }
 
     if enter {
+        let is_playlist_grid =
+            app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
         match app.delete_file_dialog_selection {
             ConfirmationSelection::Cancel => cancel_delete_file_dialog(app),
-            ConfirmationSelection::Confirm => confirm_delete_file_dialog(app, time),
+            ConfirmationSelection::Confirm => {
+                if is_playlist_grid {
+                    confirm_delete_file_dialog_playlist(app, time);
+                } else {
+                    confirm_delete_file_dialog(app, time);
+                }
+            }
         }
     }
 }
@@ -1139,6 +1315,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         if toggle_search {
             toggle_filter_popup(app);
             set_overlay_message(app, time, "Shortcut: Toggle filter popup");
+        }
+
+        if delete_current_file_permanently {
+            open_delete_file_dialog_for_selection(app, time);
+            return;
         }
 
         if close_window {

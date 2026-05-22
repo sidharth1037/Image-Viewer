@@ -56,6 +56,8 @@ pub struct ImageApp {
     pub split_pan_zoom_sync_user_disabled: bool,
     pub show_delete_file_dialog: bool,
     pub delete_file_dialog_target: Option<std::path::PathBuf>,
+    /// For playlist/group view: all paths to delete when confirmed.
+    pub delete_file_dialog_targets: Vec<std::path::PathBuf>,
     pub delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection,
     pub show_save_overwrite_dialog: bool,
     pub show_group_assign_menu: bool,
@@ -147,6 +149,7 @@ impl ImageApp {
             split_pan_zoom_sync_user_disabled: false,
             show_delete_file_dialog: false,
             delete_file_dialog_target: None,
+            delete_file_dialog_targets: Vec::new(),
             delete_file_dialog_selection: crate::ui::dialogs::confirmation_dialog::ConfirmationSelection::Confirm,
             show_save_overwrite_dialog: false,
             show_group_assign_menu: false,
@@ -277,6 +280,23 @@ impl eframe::App for ImageApp {
                     self.workspace.views[self.workspace.active_view_index].browse_folder_requested = true;
                 }
                 crate::ui::playlist_grid::PlaylistGridAction::None => {}
+            }
+
+            // Render the delete-confirmation dialog over the playlist grid when active.
+            if self.show_delete_file_dialog {
+                let panel_rect = ctx.available_rect();
+                let time = ctx.input(|i| i.time);
+                if let Some(action) = ui::dialogs::delete_file_dialog::render(self, ctx, panel_rect, None) {
+                    match action {
+                        ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Cancel => {
+                            handlers::cancel_delete_file_dialog(self);
+                        }
+                        ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Confirm => {
+                            handlers::confirm_delete_file_dialog_playlist(self, time);
+                        }
+                    }
+                    ctx.request_repaint();
+                }
             }
         } else {
             // Canvas / Empty mode: existing rendering path.
