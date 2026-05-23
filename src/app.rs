@@ -195,6 +195,7 @@ impl eframe::App for ImageApp {
         handlers::process_image_loading(self, ctx);
         handlers::process_directory_scanning(self);
         handlers::rebuild_adjusted_textures(self, ctx);
+        handlers::process_move_animation(self, ctx);
         
         // 2. Render UI Layers
         ui::topbar::render(self, ctx);

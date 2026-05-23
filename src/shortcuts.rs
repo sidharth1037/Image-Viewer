@@ -147,6 +147,7 @@ pub struct ShortcutConfig {
     pub clear_active_view: Shortcut,
     pub return_to_playlist: Shortcut,
     pub add_to_group: Shortcut,
+    pub move_to_default: Shortcut,
 }
 
 impl Default for ShortcutConfig {
@@ -186,6 +187,7 @@ impl Default for ShortcutConfig {
             clear_active_view: Shortcut::new(egui::Key::Escape, false, false, true, false),
             return_to_playlist: Shortcut::new(egui::Key::Escape, false, false, false, false),
             add_to_group: Shortcut::new(egui::Key::M, false, false, false, false),
+            move_to_default: Shortcut::new(egui::Key::M, false, true, false, false),
         }
     }
 }

@@ -1,7 +1,6 @@
 use eframe::egui;
 
 use crate::app::ImageApp;
-use crate::groups::{DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME};
 use crate::handlers;
 
 pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
@@ -9,8 +8,16 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
         return;
     }
 
+    // Close on Escape key.
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        app.show_group_assign_prompt = false;
+        app.group_assign_prompt_path = None;
+        return;
+    }
+
     let mut selected_group: Option<u32> = None;
     let mut create_group = false;
+    let mut cancel = false;
 
     egui::Window::new("Add to group")
         .collapsible(false)
@@ -19,10 +26,6 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_min_width(220.0);
             ui.vertical(|ui| {
-                if ui.button(DEFAULT_GROUP_NAME).clicked() {
-                    selected_group = Some(DEFAULT_GROUP_ID);
-                }
-
                 for group in app.workspace.group_tabs.user_groups.iter() {
                     if ui.button(&group.name).clicked() {
                         selected_group = Some(group.id);
@@ -36,8 +39,20 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                 if ui.button("+ Create new group").clicked() {
                     create_group = true;
                 }
+
+                ui.add_space(4.0);
+
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
             });
         });
+
+    if cancel {
+        app.show_group_assign_prompt = false;
+        app.group_assign_prompt_path = None;
+        return;
+    }
 
     if create_group {
         let new_id = app.workspace.group_tabs.add_group();

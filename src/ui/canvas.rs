@@ -400,13 +400,28 @@ pub fn render(
 
         // Draw the image.
         let texture = &state.frames[state.current_frame];
-        let scaled_size = image_size * state.scale;
+        
+        let mut anim_scale = 1.0;
+        let mut anim_y_offset = 0.0;
+        let mut anim_alpha = 255;
+        if let Some(start_time) = state.move_anim_start {
+            let elapsed = current_time - start_time;
+            let (scale, y_offset, alpha) = crate::handlers::move_anim_values(elapsed);
+            anim_scale = scale;
+            anim_y_offset = y_offset;
+            anim_alpha = alpha;
+        }
+
+        let scaled_size = image_size * state.scale * anim_scale;
         let center_offset = (canvas_size - scaled_size) / 2.0;
-        let image_top_left = response.rect.min + center_offset + state.pan;
+        let mut image_top_left = response.rect.min + center_offset + state.pan;
+        image_top_left.y += anim_y_offset;
+        
         let draw_rect = egui::Rect::from_min_size(image_top_left, scaled_size);
         let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
 
-        painter.image(texture.id(), draw_rect, uv, egui::Color32::WHITE);
+        let tint = egui::Color32::from_white_alpha(anim_alpha);
+        painter.image(texture.id(), draw_rect, uv, tint);
     } else {
         // Draw loading or empty indicators.
         let mut child_ui = ui.new_child(

@@ -1,5 +1,5 @@
 use crate::app::ImageApp;
-use crate::groups::{ASK_EVERY_TIME_LABEL, DEFAULT_GROUP_ID, DEFAULT_GROUP_NAME, GroupAssignTarget};
+use crate::groups::{ASK_EVERY_TIME_LABEL, GroupAssignTarget};
 use crate::ui::menu_helpers;
 use crate::sync;
 use eframe::egui;
@@ -7,7 +7,7 @@ use egui_phosphor::regular as icons;
 
 const GROUP_ASSIGN_MENU_ID: &str = "group_assign_menu";
 const GROUP_ASSIGN_MENU_WIDTH: f32 = 210.0;
-const GROUP_ASSIGN_MENU_GAP: f32 = 8.0;
+const GROUP_ASSIGN_MENU_GAP: f32 = 4.0;
 
 pub fn render_carry_adjustments_toggle(app: &mut ImageApp, ui: &mut egui::Ui) {
     let view = app.workspace.active_view();
@@ -95,12 +95,6 @@ pub fn render_group_assign_dropdown(app: &mut ImageApp, ctx: &egui::Context, ui:
                     selection_changed = true;
                 }
 
-                let default_selected = matches!(resolved_target, GroupAssignTarget::Group(id) if id == DEFAULT_GROUP_ID);
-                if menu_helpers::menu_row_button(ui, DEFAULT_GROUP_NAME, "", default_selected) {
-                    app.group_assign_target = GroupAssignTarget::Group(DEFAULT_GROUP_ID);
-                    selection_changed = true;
-                }
-
                 for group in app.workspace.group_tabs.user_groups.iter() {
                     let is_selected = matches!(resolved_target, GroupAssignTarget::Group(id) if id == group.id);
                     if menu_helpers::menu_row_button(ui, &group.name, "", is_selected) {
@@ -156,7 +150,7 @@ fn resolve_group_assign_target(app: &ImageApp) -> GroupAssignTarget {
 }
 
 fn group_assign_menu_pos(ui: &egui::Ui, button_rect: egui::Rect, app: &ImageApp) -> egui::Pos2 {
-    let item_count = 2 + app.workspace.group_tabs.user_groups.len();
+    let item_count = 1 + app.workspace.group_tabs.user_groups.len();
     let row_h = ui.spacing().interact_size.y;
     let menu_h = item_count as f32 * row_h + GROUP_ASSIGN_MENU_GAP;
 

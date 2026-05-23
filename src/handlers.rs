@@ -663,9 +663,24 @@ pub fn apply_group_assign_prompt(app: &mut ImageApp, target_group_id: u32, time:
     };
 
     let source_group_id = app.group_assign_prompt_source_group;
+    let needs_animation = source_group_id != crate::groups::DEFAULT_GROUP_ID
+        && app.workspace.content_mode == crate::workspace::ContentMode::Canvas;
+    let target_name = app
+        .workspace
+        .group_tabs
+        .group_name(target_group_id)
+        .unwrap_or_else(|| "group".to_string());
+
     let paths = vec![path];
-    transfer_items_between_groups(app, source_group_id, target_group_id, &paths, time);
+    let success = transfer_items_between_groups(app, source_group_id, target_group_id, &paths, time);
     close_group_assign_prompt(app);
+
+    if success {
+        set_overlay_message(app, time, &format!("Moved to {}", target_name));
+        if needs_animation {
+            start_move_animation(app, time);
+        }
+    }
 }
 
 pub fn handle_add_to_group_shortcut(app: &mut ImageApp, time: f64) {
@@ -683,10 +698,134 @@ pub fn handle_add_to_group_shortcut(app: &mut ImageApp, time: f64) {
         }
         crate::groups::GroupAssignTarget::Group(target_group_id) => {
             let source_group_id = app.workspace.group_tabs.selected_id;
+            let needs_animation = source_group_id != crate::groups::DEFAULT_GROUP_ID
+                && app.workspace.content_mode == crate::workspace::ContentMode::Canvas;
+            let target_name = app
+                .workspace
+                .group_tabs
+                .group_name(target_group_id)
+                .unwrap_or_else(|| "group".to_string());
+
             let paths = vec![path];
-            transfer_items_between_groups(app, source_group_id, target_group_id, &paths, time);
+            let success = transfer_items_between_groups(app, source_group_id, target_group_id, &paths, time);
+
+            if success {
+                set_overlay_message(app, time, &format!("Moved to {}", target_name));
+                if needs_animation {
+                    start_move_animation(app, time);
+                }
+            }
         }
     }
+}
+
+pub fn handle_move_to_default_shortcut(app: &mut ImageApp, time: f64) {
+    if !app.settings.groups_enabled {
+        return;
+    }
+
+    let source_group_id = app.workspace.group_tabs.selected_id;
+    if source_group_id == crate::groups::DEFAULT_GROUP_ID {
+        set_overlay_message(app, time, "Already in Default");
+        return;
+    }
+
+    let Some(path) = app.workspace.active_view().current_file_path.clone() else {
+        return;
+    };
+
+    let is_canvas = app.workspace.content_mode == crate::workspace::ContentMode::Canvas;
+    let paths = vec![path];
+    let success = transfer_items_between_groups(
+        app,
+        source_group_id,
+        crate::groups::DEFAULT_GROUP_ID,
+        &paths,
+        time,
+    );
+
+    if success {
+        set_overlay_message(app, time, "Moved to Default");
+        if is_canvas {
+            start_move_animation(app, time);
+        }
+    }
+}
+
+// --- Move animation constants (each phase is individually tunable) ---
+const MOVE_ANIM_SCALE_DOWN_DURATION: f64 = 0.09;
+const MOVE_ANIM_PAUSE_DURATION: f64 = 0.04;
+const MOVE_ANIM_SLIDE_UP_DURATION: f64 = 0.10;
+
+pub const MOVE_ANIM_TOTAL_DURATION: f64 =
+    MOVE_ANIM_SCALE_DOWN_DURATION + MOVE_ANIM_PAUSE_DURATION + MOVE_ANIM_SLIDE_UP_DURATION;
+pub const MOVE_ANIM_SCALE_FACTOR: f32 = 0.92;
+pub const MOVE_ANIM_SLIDE_DISTANCE: f32 = 80.0;
+
+/// Returns (scale_factor, y_offset, alpha) for the current animation frame.
+pub fn move_anim_values(elapsed: f64) -> (f32, f32, u8) {
+    if elapsed < MOVE_ANIM_SCALE_DOWN_DURATION {
+        // Phase 1: scale down
+        let t = (elapsed / MOVE_ANIM_SCALE_DOWN_DURATION) as f32;
+        let scale = 1.0 + (MOVE_ANIM_SCALE_FACTOR - 1.0) * t;
+        (scale, 0.0, 255)
+    } else if elapsed < MOVE_ANIM_SCALE_DOWN_DURATION + MOVE_ANIM_PAUSE_DURATION {
+        // Phase 2: pause
+        (MOVE_ANIM_SCALE_FACTOR, 0.0, 255)
+    } else {
+        // Phase 3: slide up + fade out
+        let phase_elapsed = elapsed - MOVE_ANIM_SCALE_DOWN_DURATION - MOVE_ANIM_PAUSE_DURATION;
+        let t = (phase_elapsed / MOVE_ANIM_SLIDE_UP_DURATION).min(1.0) as f32;
+        let y_offset = -MOVE_ANIM_SLIDE_DISTANCE * t;
+        let alpha = ((1.0 - t) * 255.0) as u8;
+        (MOVE_ANIM_SCALE_FACTOR, y_offset, alpha)
+    }
+}
+
+fn start_move_animation(app: &mut ImageApp, time: f64) {
+    let view = app.workspace.active_view();
+    let playlist_len = view.active_playlist.len();
+    let direction = if playlist_len == 0 {
+        0
+    } else {
+        // current_index was already clamped by apply_group_playlist_state.
+        // If we're at the end, go backward; otherwise go forward.
+        // direction == 0 means clear view (playlist empty).
+        1
+    };
+
+    app.workspace.active_view_mut().move_anim_start = Some(time);
+    app.workspace.active_view_mut().move_anim_direction = direction;
+}
+
+pub fn process_move_animation(app: &mut ImageApp, ctx: &egui::Context) {
+    let view = app.workspace.active_view();
+    let Some(start) = view.move_anim_start else {
+        return;
+    };
+
+    let now = ctx.input(|i| i.time);
+    let elapsed = now - start;
+    if elapsed < MOVE_ANIM_TOTAL_DURATION {
+        ctx.request_repaint();
+        return;
+    }
+
+    // Animation complete — advance to the next image.
+    let direction = app.workspace.active_view().move_anim_direction;
+    app.workspace.active_view_mut().move_anim_start = None;
+    app.workspace.active_view_mut().move_anim_direction = 0;
+
+    if direction == 0 || app.workspace.active_view().active_playlist.is_empty() {
+        let index = app.workspace.active_view_index;
+        clear_current_view_for_empty_playlist(app, index);
+        return;
+    }
+
+    let target_path = app.workspace.active_view().active_playlist
+        [app.workspace.active_view().current_index]
+        .clone();
+    load_target_file(app, target_path);
 }
 
 fn transfer_items_between_groups(
@@ -1186,6 +1325,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         return;
     }
 
+    // Block most input while a move animation is playing.
+    if app.workspace.active_view().move_anim_start.is_some() {
+        return;
+    }
+
     let shortcuts = app.settings.shortcuts;
     let input = ctx.input(|i| {
         (
@@ -1225,6 +1369,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.clear_active_view.is_pressed(i),
             shortcuts.return_to_playlist.is_pressed(i),
             shortcuts.add_to_group.is_pressed(i),
+            shortcuts.move_to_default.is_pressed(i),
         )
     });
 
@@ -1265,6 +1410,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         clear_view,
         return_to_playlist_pressed,
         add_to_group,
+        move_to_default,
     ) = input;
 
     let is_playlist_grid = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
@@ -1364,6 +1510,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             return_to_playlist_view(app);
             return;
         }
+    }
+
+    if move_to_default {
+        handle_move_to_default_shortcut(app, time);
+        return;
     }
 
     if add_to_group {
