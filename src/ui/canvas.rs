@@ -443,43 +443,62 @@ pub fn render(
                     .layout(egui::Layout::top_down(egui::Align::Center)),
             );
 
-            // Vertically centre: push down by half the area minus half the content height estimate.
-            let content_height = 100.0; // rough: text + spacing + two buttons
-            let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
-            group_ui.add_space(top_padding);
+            let filter_text = state.filter.criteria.text.trim();
+            if state.scanning_in_progress {
+                let content_height = 64.0;
+                let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+                group_ui.add_space(top_padding);
+                group_ui.add(egui::Spinner::new().size(20.0));
+                group_ui.add_space(8.0);
+                group_ui.add(egui::Label::new("Scanning folder...").selectable(false));
+            } else if !filter_text.is_empty() && !state.source_playlist.is_empty() {
+                let content_height = 60.0;
+                let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+                group_ui.add_space(top_padding);
+                let message = format!(
+                    "No files found with the current filter.\nContains: {}",
+                    filter_text
+                );
+                group_ui.add(egui::Label::new(message).selectable(false));
+            } else {
+                // Vertically centre: push down by half the area minus half the content height estimate.
+                let content_height = 100.0; // rough: text + spacing + two buttons
+                let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+                group_ui.add_space(top_padding);
 
-            group_ui.add(
-                egui::Label::new("No image loaded.\nDrag and drop an image or folder here.")
-                    .selectable(false),
-            );
-            group_ui.add_space(8.0);
+                group_ui.add(
+                    egui::Label::new("No image loaded.\nDrag and drop an image or folder here.")
+                        .selectable(false),
+                );
+                group_ui.add_space(8.0);
 
-            let open_file_btn = egui::Button::new(
-                egui::RichText::new(format!(
-                    "{}  Open File",
-                    egui_phosphor::regular::FILE_IMAGE
-                ))
-                .size(14.0),
-            )
-            .min_size(egui::vec2(120.0, 30.0));
+                let open_file_btn = egui::Button::new(
+                    egui::RichText::new(format!(
+                        "{}  Open File",
+                        egui_phosphor::regular::FILE_IMAGE
+                    ))
+                    .size(14.0),
+                )
+                .min_size(egui::vec2(120.0, 30.0));
 
-            if group_ui.add(open_file_btn).clicked() {
-                state.browse_file_requested = true;
-            }
+                if group_ui.add(open_file_btn).clicked() {
+                    state.browse_file_requested = true;
+                }
 
-            group_ui.add_space(4.0);
+                group_ui.add_space(4.0);
 
-            let open_folder_btn = egui::Button::new(
-                egui::RichText::new(format!(
-                    "{}  Open Folder",
-                    egui_phosphor::regular::FOLDER_OPEN
-                ))
-                .size(14.0),
-            )
-            .min_size(egui::vec2(120.0, 30.0));
+                let open_folder_btn = egui::Button::new(
+                    egui::RichText::new(format!(
+                        "{}  Open Folder",
+                        egui_phosphor::regular::FOLDER_OPEN
+                    ))
+                    .size(14.0),
+                )
+                .min_size(egui::vec2(120.0, 30.0));
 
-            if group_ui.add(open_folder_btn).clicked() {
-                state.browse_folder_requested = true;
+                if group_ui.add(open_folder_btn).clicked() {
+                    state.browse_folder_requested = true;
+                }
             }
         } else {
             child_ui.spinner();

@@ -1001,8 +1001,6 @@ fn reset_view_for_new_file(app: &mut ImageApp) {
     active_view.reset_start_time = None;
     active_view.original_pixels.clear();
     active_view.rotation_quarter_turns = 0;
-    active_view.overlay_last_changed = None;
-    active_view.overlay_text = None;
     active_view.show_original_while_held = false;
 
     if active_view.carry_adjustments && active_view.adjustments.has_adjustments() {
