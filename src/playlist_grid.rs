@@ -68,6 +68,16 @@ impl PlaylistSelection {
         self.last_clicked = None;
     }
 
+    /// Select all items up to total_items.
+    pub fn select_all(&mut self, total_items: usize) {
+        self.selected.clear();
+        for i in 0..total_items {
+            self.selected.insert(i);
+        }
+        self.anchor = Some(0);
+        self.last_clicked = Some(total_items.saturating_sub(1));
+    }
+
     /// Select a single item, clearing all others.
     pub fn select_single(&mut self, index: usize) {
         self.selected.clear();

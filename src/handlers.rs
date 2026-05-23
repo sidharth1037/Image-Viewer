@@ -1370,6 +1370,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             shortcuts.return_to_playlist.is_pressed(i),
             shortcuts.add_to_group.is_pressed(i),
             shortcuts.move_to_default.is_pressed(i),
+            shortcuts.select_all.is_pressed(i),
         )
     });
 
@@ -1411,6 +1412,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         return_to_playlist_pressed,
         add_to_group,
         move_to_default,
+        select_all,
     ) = input;
 
     let is_playlist_grid = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
@@ -1418,6 +1420,17 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
     if is_playlist_grid {
         if clear_view {
             clear_active_view(app);
+            return;
+        }
+
+        if select_all {
+            let playlist = app.workspace.active_view().active_playlist.clone();
+            let total_items = playlist.len();
+            if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+                grid.selection.select_all(total_items);
+                grid.refresh_selected_size_cache(&playlist);
+                set_overlay_message(app, time, "Shortcut: Select all");
+            }
             return;
         }
 
