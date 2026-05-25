@@ -11,6 +11,7 @@ const SEPARATOR_ID: &str = "folder_toolbar_separator";
 #[derive(Clone, Copy)]
 pub enum FolderToolbarAction {
     ToggleRecursiveScan,
+    FindDuplicates,
 }
 
 pub struct FolderToolbarButton {
@@ -22,15 +23,25 @@ pub struct FolderToolbarButton {
     pub action: FolderToolbarAction,
 }
 
-pub fn default_buttons(recursive_scan_enabled: bool) -> [FolderToolbarButton; 1] {
-    [FolderToolbarButton {
-        id: "recursive_scan_toggle",
-        icon: icons::FOLDER_OPEN,
-        tooltip: "Include subfolders (recursive scan)",
-        selected: recursive_scan_enabled,
-        enabled: true,
-        action: FolderToolbarAction::ToggleRecursiveScan,
-    }]
+pub fn default_buttons(recursive_scan_enabled: bool, duplicate_finder_active: bool) -> Vec<FolderToolbarButton> {
+    vec![
+        FolderToolbarButton {
+            id: "recursive_scan_toggle",
+            icon: icons::FOLDER_OPEN,
+            tooltip: "Include subfolders (recursive scan)",
+            selected: recursive_scan_enabled,
+            enabled: true,
+            action: FolderToolbarAction::ToggleRecursiveScan,
+        },
+        FolderToolbarButton {
+            id: "find_duplicates_toggle",
+            icon: icons::STACK_SIMPLE,
+            tooltip: "Find duplicate files",
+            selected: duplicate_finder_active,
+            enabled: true,
+            action: FolderToolbarAction::FindDuplicates,
+        },
+    ]
 }
 
 pub fn render(ctx: &egui::Context, buttons: &[FolderToolbarButton]) -> Option<FolderToolbarAction> {

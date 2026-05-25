@@ -15,3 +15,4 @@ pub mod group_tabs;
 pub mod notification_toast;
 pub mod drag_preview;
 pub mod group_assign_prompt;
+pub mod duplicate_view;

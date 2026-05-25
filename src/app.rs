@@ -194,6 +194,7 @@ impl eframe::App for ImageApp {
         handlers::handle_keyboard(self, ctx);
         handlers::process_image_loading(self, ctx);
         handlers::process_directory_scanning(self);
+        handlers::process_duplicate_scanning(self, ctx);
         handlers::rebuild_adjusted_textures(self, ctx);
         handlers::process_move_animation(self, ctx);
         
@@ -225,23 +226,27 @@ impl eframe::App for ImageApp {
         let has_modal_dialog = self.show_delete_file_dialog || self.show_save_overwrite_dialog;
         
         let is_playlist_grid = self.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
+        let is_duplicate_finder = self.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder;
 
         ui::bottom_bar::render(self, ctx);
         ui::notification_toast::render(self, ctx);
         ui::drag_preview::render(self, ctx);
 
-        if is_playlist_grid {
+        if is_playlist_grid || is_duplicate_finder {
             let recursive_scan_enabled = self.workspace.active_view().recursive_scan_enabled;
-            let toolbar_buttons = ui::folder_toolbar::default_buttons(recursive_scan_enabled);
+            let toolbar_buttons = ui::folder_toolbar::default_buttons(recursive_scan_enabled, is_duplicate_finder);
             if let Some(action) = ui::folder_toolbar::render(ctx, &toolbar_buttons) {
                 match action {
                     ui::folder_toolbar::FolderToolbarAction::ToggleRecursiveScan => {
                         handlers::toggle_recursive_scan(self);
                     }
+                    ui::folder_toolbar::FolderToolbarAction::FindDuplicates => {
+                        handlers::toggle_duplicate_finder(self, ctx);
+                    }
                 }
             }
 
-            // Playlist grid mode: render the thumbnail grid in the central panel.
+            // Renders group tabs + view (playlist grid or duplicate finder) in the central panel.
             let panel_output = egui::CentralPanel::default()
                 .frame(egui::Frame::new())
                 .show(ctx, |ui| {
@@ -263,10 +268,27 @@ impl eframe::App for ImageApp {
                         panel_rect.max,
                     );
 
-                    ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
-                        crate::ui::playlist_grid::render(self, ctx, ui)
-                    })
-                    .inner
+                    let show_duplicate_content = is_duplicate_finder
+                        && self.workspace.group_tabs.selected_id == crate::groups::DEFAULT_GROUP_ID;
+
+                    if show_duplicate_content {
+                        let action = ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+                            crate::ui::duplicate_view::render(self, ctx, ui, content_rect)
+                        })
+                        .inner;
+                        match action {
+                            ui::duplicate_view::DuplicateViewAction::OpenImage { group_index, path, index_in_group } => {
+                                handlers::duplicate_view_open_image(self, group_index, path, index_in_group);
+                            }
+                            ui::duplicate_view::DuplicateViewAction::None => {}
+                        }
+                        crate::ui::playlist_grid::PlaylistGridAction::None
+                    } else {
+                        ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
+                            crate::ui::playlist_grid::render(self, ctx, ui)
+                        })
+                        .inner
+                    }
                 });
 
             let grid_action = panel_output.inner;
@@ -283,7 +305,7 @@ impl eframe::App for ImageApp {
                 crate::ui::playlist_grid::PlaylistGridAction::None => {}
             }
 
-            // Render the delete-confirmation dialog over the playlist grid when active.
+            // Render the delete-confirmation dialog over the central panel when active.
             if self.show_delete_file_dialog {
                 let panel_rect = ctx.available_rect();
                 let time = ctx.input(|i| i.time);
@@ -293,7 +315,13 @@ impl eframe::App for ImageApp {
                             handlers::cancel_delete_file_dialog(self);
                         }
                         ui::dialogs::delete_file_dialog::DeleteFileDialogAction::Confirm => {
-                            handlers::confirm_delete_file_dialog_playlist(self, time);
+                            let show_duplicate_content = is_duplicate_finder
+                                && self.workspace.group_tabs.selected_id == crate::groups::DEFAULT_GROUP_ID;
+                            if show_duplicate_content {
+                                handlers::confirm_delete_file_dialog_duplicate(self, time);
+                            } else {
+                                handlers::confirm_delete_file_dialog_playlist(self, time);
+                            }
                         }
                     }
                     ctx.request_repaint();

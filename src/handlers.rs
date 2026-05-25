@@ -205,6 +205,20 @@ pub fn confirm_delete_file_dialog(app: &mut ImageApp, time: f64) {
                 .unwrap_or_else(|| deleted_path.to_string_lossy().into_owned());
             let text = format!("Shortcut: Deleted {}", name);
             set_overlay_message(app, time, &text);
+
+            if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+                if dup_state.active_group_index.is_some() {
+                    dup_state.remove_paths(&[deleted_path.clone()]);
+                    if let Some(state) = app.workspace.group_tabs.group_playlist_mut(crate::groups::DEFAULT_GROUP_ID) {
+                        state.source_playlist.retain(|p| p != &deleted_path);
+                        state.rebuild_active_playlist();
+                    }
+                    if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+                        grid.thumbnail_cache.remove(&deleted_path);
+                        grid.pending_requests.remove(&deleted_path);
+                    }
+                }
+            }
         }
         crate::file_ops::delete_current::DeleteCurrentFileOutcome::NoFileToDelete => {
             set_overlay_message(app, time, "Shortcut: No file to delete");
@@ -1413,6 +1427,37 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         select_all,
     ) = input;
 
+    let is_duplicate_finder = app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder;
+
+    if is_duplicate_finder {
+        if clear_view {
+            clear_active_view(app);
+            return;
+        }
+
+        if return_to_playlist_pressed {
+            toggle_duplicate_finder(app, ctx);
+            return;
+        }
+
+        if toggle_settings {
+            toggle_settings_window(app);
+            set_overlay_message(app, time, "Shortcut: Toggle settings");
+        }
+
+        if delete_current_file_permanently {
+            open_delete_file_dialog_for_duplicate_selection(app, time);
+            return;
+        }
+
+        if close_window {
+            set_overlay_message(app, time, "Shortcut: Close window");
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+
+        return;
+    }
+
     let is_playlist_grid = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
 
     if is_playlist_grid {
@@ -1512,14 +1557,20 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
         return;
     }
 
-    // Esc (no modifiers): return to playlist grid if we came from one.
+    // Esc (no modifiers): return to playlist grid or duplicate view.
     if return_to_playlist_pressed {
-        if app.workspace.content_mode == crate::workspace::ContentMode::Canvas
-            && app.workspace.playlist_grid.is_some()
-            && app.workspace.active_view().current_folder.is_some()
-        {
-            return_to_playlist_view(app);
-            return;
+        if app.workspace.content_mode == crate::workspace::ContentMode::Canvas {
+            let is_from_duplicate = app.workspace.duplicate_finder.as_ref()
+                .map_or(false, |df| df.active_group_index.is_some());
+            if is_from_duplicate {
+                return_from_duplicate_canvas(app);
+                return;
+            } else if app.workspace.playlist_grid.is_some()
+                && app.workspace.active_view().current_folder.is_some()
+            {
+                return_to_playlist_view(app);
+                return;
+            }
         }
     }
 
@@ -2340,4 +2391,266 @@ pub fn return_to_playlist_view(app: &mut ImageApp) {
     app.show_floating_toolbar = false;
     app.cached_title.clear();
 }
+
+/// Toggle the duplicate finder view.
+pub fn toggle_duplicate_finder(app: &mut ImageApp, ctx: &egui::Context) {
+    if app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder {
+        // Return to PlaylistGrid.
+        app.workspace.content_mode = crate::workspace::ContentMode::PlaylistGrid;
+        if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+            dup_state.clear();
+        }
+    } else {
+        // 1. Switch to Default group if not already on it.
+        switch_group(app, crate::groups::DEFAULT_GROUP_ID);
+
+        // 2. Ensure DuplicateFinderState is initialized.
+        if app.workspace.duplicate_finder.is_none() {
+            app.workspace.duplicate_finder = Some(crate::duplicate_state::DuplicateFinderState::new(ctx));
+        }
+
+        // 3. Get source playlist from default view.
+        let paths = app.workspace.active_view().source_playlist.clone();
+
+        // 4. Start background duplicate scan.
+        if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+            dup_state.start_scan(paths);
+        }
+
+        // 5. Switch content mode to DuplicateFinder.
+        app.workspace.content_mode = crate::workspace::ContentMode::DuplicateFinder;
+    }
+}
+
+/// Poll background scan channel and trigger repaint if new results arrive.
+pub fn process_duplicate_scanning(app: &mut ImageApp, ctx: &egui::Context) {
+    if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+        if dup_state.process_scan_results() {
+            ctx.request_repaint();
+        }
+    }
+}
+
+/// Open an image from duplicate view in Canvas mode.
+pub fn duplicate_view_open_image(
+    app: &mut ImageApp,
+    group_index: usize,
+    path: std::path::PathBuf,
+    index_in_group: usize,
+) {
+    // 1. Save current group state first.
+    let current_state = crate::groups::GroupPlaylistState::from_view(app.workspace.active_view());
+    app.workspace
+        .group_tabs
+        .set_group_playlist(crate::groups::DEFAULT_GROUP_ID, current_state);
+
+    // 2. Configure active group row in DuplicateFinderState.
+    let dup_state = app.workspace.duplicate_finder.as_mut().unwrap();
+    dup_state.active_group_index = Some(group_index);
+    let paths = dup_state.groups[group_index].paths.clone();
+
+    // 3. Set the active view's playlist state to only show the duplicates.
+    let view = app.workspace.active_view_mut();
+    view.source_playlist = paths.clone();
+    view.active_playlist = paths.clone();
+    view.current_index = index_in_group;
+
+    // 4. Enter Canvas mode.
+    app.workspace.content_mode = crate::workspace::ContentMode::Canvas;
+    app.workspace.active_view_mut().preload.on_new_open();
+    load_target_file(app, path);
+}
+
+/// Return from Canvas mode back to the Duplicate Finder view.
+pub fn return_from_duplicate_canvas(app: &mut ImageApp) {
+    let current_index = app.workspace.active_view().current_index;
+    let _ = app.workspace.active_view_mut().load_id.fetch_add(1, Ordering::AcqRel);
+    
+    // Clear canvas/ViewerState load state.
+    let view = app.workspace.active_view_mut();
+    view.frames.clear();
+    view.frame_durations.clear();
+    view.current_frame = 0;
+    view.last_frame_time = None;
+    view.image_resolution = None;
+    view.image_density = None;
+    view.load_error = None;
+    view.current_file_path = None;
+    view.current_file_name.clear();
+    view.current_file_size_bytes = None;
+    view.original_pixels.clear();
+    view.adjustments.reset_all();
+    view.adjustments_dirty = false;
+    view.rotation_quarter_turns = 0;
+    view.overlay_last_changed = None;
+    view.overlay_text = None;
+    view.show_original_while_held = false;
+    view.auto_fit = true;
+    view.scale = 1.0;
+    view.pan = egui::Vec2::ZERO;
+    view.target_scale = None;
+    view.target_pan = None;
+    view.reset_start_time = None;
+    view.preload.on_new_open();
+
+    // Restore default group's playlist state.
+    let default_state = app
+        .workspace
+        .group_tabs
+        .group_playlist(crate::groups::DEFAULT_GROUP_ID)
+        .cloned()
+        .unwrap_or_else(crate::groups::GroupPlaylistState::new);
+    apply_group_playlist_state(app, &default_state);
+
+    // Return to DuplicateFinder mode.
+    app.workspace.content_mode = crate::workspace::ContentMode::DuplicateFinder;
+
+    // Restore focus/selection in duplicate finder state.
+    if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+        if let Some(group_index) = dup_state.active_group_index {
+            if group_index < dup_state.groups.len() {
+                let total_items = dup_state.groups[group_index].paths.len();
+                if current_index < total_items {
+                    dup_state.groups[group_index].selection.select_single(current_index);
+                }
+            }
+        }
+        dup_state.active_group_index = None;
+    }
+
+    if app.workspace.is_split() {
+        app.workspace.views.truncate(1);
+        app.workspace.active_view_index = 0;
+    }
+    close_filter_popup(app);
+    app.show_sort_menu = false;
+    app.sort_menu_pos = None;
+    app.show_floating_toolbar = false;
+    app.cached_title.clear();
+}
+
+/// Open the permanent-delete confirmation dialog for duplicate selection.
+pub fn open_delete_file_dialog_for_duplicate_selection(app: &mut ImageApp, time: f64) {
+    let mut selected_paths = Vec::new();
+    if let Some(dup_state) = app.workspace.duplicate_finder.as_ref() {
+        for group in &dup_state.groups {
+            for idx in group.selection.selected.iter() {
+                if let Some(path) = group.paths.get(*idx) {
+                    selected_paths.push(path.clone());
+                }
+            }
+        }
+    }
+
+    if selected_paths.is_empty() {
+        set_overlay_message(app, time, "Shortcut: No files selected");
+        return;
+    }
+
+    close_filter_popup(app);
+    app.show_sort_menu = false;
+    app.sort_menu_pos = None;
+
+    app.show_delete_file_dialog = true;
+    app.delete_file_dialog_targets = selected_paths.clone();
+    app.delete_file_dialog_target = selected_paths.into_iter().next();
+    app.delete_file_dialog_selection = ConfirmationSelection::Confirm;
+}
+
+/// Confirm deletion of duplicate files from the duplicate view.
+pub fn confirm_delete_file_dialog_duplicate(app: &mut ImageApp, time: f64) {
+    let targets = app.delete_file_dialog_targets.clone();
+    cancel_delete_file_dialog(app);
+
+    if targets.is_empty() {
+        return;
+    }
+
+    // 1. Delete all target files from disk.
+    let mut deleted: Vec<std::path::PathBuf> = Vec::new();
+    let mut failed: Vec<String> = Vec::new();
+
+    for path in &targets {
+        match std::fs::remove_file(path) {
+            Ok(()) => deleted.push(path.clone()),
+            Err(e) => failed.push(format!("{}: {}", path.display(), e)),
+        }
+    }
+
+    if deleted.is_empty() {
+        let text = format!("Delete failed: {}", failed.join(", "));
+        set_overlay_message(app, time, &text);
+        return;
+    }
+
+    // 2. Patch every group's stored playlist — remove deleted paths.
+    let all_group_ids: Vec<u32> = {
+        let mut ids = vec![crate::groups::DEFAULT_GROUP_ID];
+        ids.extend(app.workspace.group_tabs.user_groups.iter().map(|g| g.id));
+        ids
+    };
+
+    for group_id in &all_group_ids {
+        if let Some(state) = app.workspace.group_tabs.group_playlist_mut(*group_id) {
+            let before = state.source_playlist.len();
+            state.source_playlist.retain(|p| !deleted.iter().any(|d| d == p));
+            if state.source_playlist.len() != before {
+                state.rebuild_active_playlist();
+            }
+        }
+    }
+
+    // 3. Re-apply the patched active/Default group state to the live view.
+    if let Some(patched_state) = app
+        .workspace
+        .group_tabs
+        .group_playlist(crate::groups::DEFAULT_GROUP_ID)
+        .cloned()
+    {
+        apply_group_playlist_state(app, &patched_state);
+    }
+
+    // 4. Update duplicate finder groups.
+    if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+        dup_state.remove_paths(&deleted);
+    }
+
+    // 5. Evict deleted paths from the thumbnail cache.
+    {
+        if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+            for path in &deleted {
+                grid.thumbnail_cache.remove(path);
+                grid.pending_requests.remove(path);
+            }
+        }
+    }
+
+    // 6. Trigger directory rescan for Default group.
+    if let Some(scan_target) = app
+        .workspace
+        .active_view()
+        .current_folder
+        .clone()
+        .map(|folder| folder.join("__delete_refresh__"))
+    {
+        request_directory_scan(app, scan_target);
+    }
+
+    // 7. Overlay message.
+    let text = if failed.is_empty() {
+        if deleted.len() == 1 {
+            let name = deleted[0]
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| deleted[0].to_string_lossy().into_owned());
+            format!("Deleted {}", name)
+        } else {
+            format!("Deleted {} files", deleted.len())
+        }
+    } else {
+        format!("Deleted {} files, failed: {}", deleted.len(), failed.join(", "))
+    };
+    set_overlay_message(app, time, &text);
+}
+
 

@@ -18,6 +18,8 @@ mod notifications;
 mod ui;
 mod handlers;
 mod workspace;
+mod duplicate_scanner;
+mod duplicate_state;
 mod sync;
 mod file_ops;
 #[cfg(windows)]

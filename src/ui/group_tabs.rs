@@ -172,7 +172,8 @@ pub fn render_in_rect(app: &mut ImageApp, _ctx: &egui::Context, ui: &mut egui::U
 
 fn is_visible(app: &ImageApp) -> bool {
     app.settings.groups_enabled
-        && app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid
+        && (app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid
+            || app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder)
 }
 
 struct TabAction {

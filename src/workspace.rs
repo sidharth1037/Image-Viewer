@@ -10,7 +10,8 @@ pub enum ContentMode {
     Canvas,
     /// Viewing folder contents as a thumbnail grid.
     PlaylistGrid,
-    // Future: PlaylistDetails, etc.
+    /// Viewing duplicate files found in the current playlist.
+    DuplicateFinder,
 }
 
 pub struct Workspace {
@@ -21,6 +22,7 @@ pub struct Workspace {
     /// Esc can return to it.  `None` until the user first opens a folder.
     pub playlist_grid: Option<PlaylistGridState>,
     pub group_tabs: crate::groups::GroupTabsState,
+    pub duplicate_finder: Option<crate::duplicate_state::DuplicateFinderState>,
 }
 
 impl Workspace {
@@ -31,6 +33,7 @@ impl Workspace {
             content_mode: ContentMode::Empty,
             playlist_grid: None,
             group_tabs: crate::groups::GroupTabsState::new(),
+            duplicate_finder: None,
         }
     }
 
