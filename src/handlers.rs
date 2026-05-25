@@ -361,6 +361,11 @@ pub fn confirm_delete_file_dialog_playlist(app: &mut ImageApp, time: f64) {
         }
     }
 
+    // Update duplicate finder groups if initialized.
+    if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+        dup_state.remove_paths(&deleted);
+    }
+
     // 6. For the default group, trigger a directory rescan so that the source
     //    playlist is authoritative from disk again (the scan handler also keeps
     //    the DEFAULT group store in sync). For user groups, the scan result is
@@ -2045,6 +2050,14 @@ pub fn process_directory_scanning(app: &mut ImageApp) {
                 app.workspace
                     .group_tabs
                     .set_group_playlist(crate::groups::DEFAULT_GROUP_ID, updated);
+
+                // If currently in DuplicateFinder mode, trigger a duplicate rescan automatically.
+                if app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder {
+                    let paths = app.workspace.views[i].source_playlist.clone();
+                    if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+                        dup_state.start_scan(paths);
+                    }
+                }
             }
         }
     }
@@ -2412,9 +2425,13 @@ pub fn toggle_duplicate_finder(app: &mut ImageApp, ctx: &egui::Context) {
         // 3. Get source playlist from default view.
         let paths = app.workspace.active_view().source_playlist.clone();
 
-        // 4. Start background duplicate scan.
+        // 4. Start background duplicate scan if paths changed in this session.
         if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
-            dup_state.start_scan(paths);
+            let needs_scan = dup_state.last_scanned_paths.as_ref()
+                .map_or(true, |last_paths| *last_paths != paths);
+            if needs_scan {
+                dup_state.start_scan(paths);
+            }
         }
 
         // 5. Switch content mode to DuplicateFinder.

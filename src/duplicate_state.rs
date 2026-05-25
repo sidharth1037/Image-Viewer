@@ -29,6 +29,8 @@ pub struct DuplicateFinderState {
     /// When entering Canvas mode from a duplicate row, tracks which group
     /// we came from so Escape returns to the duplicate finder.
     pub active_group_index: Option<usize>,
+    /// Tracks the default playlist paths that were scanned in this session.
+    pub last_scanned_paths: Option<Vec<PathBuf>>,
 }
 
 impl DuplicateFinderState {
@@ -44,6 +46,7 @@ impl DuplicateFinderState {
             scan_req_tx,
             scan_res_rx,
             active_group_index: None,
+            last_scanned_paths: None,
         }
     }
 
@@ -71,6 +74,7 @@ impl DuplicateFinderState {
 
     /// Start a new duplicate scan with the given file list.
     pub fn start_scan(&mut self, paths: Vec<PathBuf>) {
+        self.last_scanned_paths = Some(paths.clone());
         let request_id = self.scan_id.fetch_add(1, Ordering::AcqRel) + 1;
         self.scanning = true;
         self.groups.clear();
@@ -82,6 +86,9 @@ impl DuplicateFinderState {
 
     /// Remove the given paths from all groups and prune groups that drop below 2 members.
     pub fn remove_paths(&mut self, deleted: &[PathBuf]) {
+        if let Some(ref mut paths) = self.last_scanned_paths {
+            paths.retain(|p| !deleted.iter().any(|d| d == p));
+        }
         for group in &mut self.groups {
             group.paths.retain(|p| !deleted.iter().any(|d| d == p));
             group.selection.clear();
@@ -92,7 +99,6 @@ impl DuplicateFinderState {
 
     /// Clear all state (e.g. when leaving duplicate finder mode).
     pub fn clear(&mut self) {
-        self.groups.clear();
         self.scanning = false;
         self.active_group_index = None;
     }
