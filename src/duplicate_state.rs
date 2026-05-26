@@ -141,6 +141,14 @@ impl ScanState {
         self.scanning = false;
     }
 
+    /// Cancel the currently running scan.
+    pub fn cancel_scan(&mut self) {
+        if self.scanning {
+            self.scan_id.fetch_add(1, Ordering::SeqCst);
+            self.scanning = false;
+        }
+    }
+
     /// Progress as a fraction in [0.0, 1.0], or `None` if not scanning.
     pub fn progress_fraction(&self) -> Option<f32> {
         if self.scanning && self.total_files > 0 {
@@ -166,6 +174,10 @@ pub struct DuplicateFinderState {
     /// When entering Canvas mode from a duplicate row, tracks which group
     /// we came from so Escape returns to the duplicate finder.
     pub active_group_index: Option<usize>,
+    /// Whether the scan method dropdown menu is currently visible.
+    pub show_dropdown: bool,
+    /// Floating screen position of the dropdown menu.
+    pub dropdown_pos: Option<eframe::egui::Pos2>,
 }
 
 impl DuplicateFinderState {
@@ -190,6 +202,8 @@ impl DuplicateFinderState {
             exact: ScanState::new(exact_cancel, exact_tx, exact_rx),
             perceptual: ScanState::new(perceptual_cancel, perceptual_tx, perceptual_rx),
             active_group_index: None,
+            show_dropdown: false,
+            dropdown_pos: None,
         }
     }
 
@@ -207,13 +221,6 @@ impl DuplicateFinderState {
             ScanType::Exact => &mut self.exact,
             ScanType::Perceptual => &mut self.perceptual,
         }
-    }
-
-    /// Start both scans with the same path set.
-    /// Each scan independently checks its session cache.
-    pub fn start_all_scans(&mut self, paths: Vec<PathBuf>) {
-        self.exact.start_scan(paths.clone());
-        self.perceptual.start_scan(paths);
     }
 
     /// Poll both result channels. Returns `true` if any state changed.

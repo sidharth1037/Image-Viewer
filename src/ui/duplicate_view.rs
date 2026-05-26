@@ -366,115 +366,110 @@ pub fn render(
 
 /// Render the title bar strip at the top of the duplicate finder view.
 fn render_title_bar(
-    app: &ImageApp,
+    app: &mut ImageApp,
     ui: &mut egui::Ui,
     rect: egui::Rect,
     action: &mut DuplicateViewAction,
 ) {
     let bg = ui.visuals().window_fill();
-    ui.painter().rect_filled(rect, 0.0, bg);
+    // Expand background rect slightly downwards by 1.0px to prevent sub-pixel gaps!
+    let bg_rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y + 1.0));
+    ui.painter().rect_filled(bg_rect, 0.0, bg);
 
     // Bottom separator.
     let sep_stroke = egui::Stroke::new(
         1.0,
         ui.visuals().widgets.noninteractive.bg_stroke.color,
     );
-    ui.painter().hline(rect.x_range(), rect.bottom(), sep_stroke);
+    // Draw hline exactly at bottom - 0.5 to keep it inside the background!
+    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, sep_stroke);
 
-    let dup_state = match app.workspace.duplicate_finder.as_ref() {
+    let dup_state = match app.workspace.duplicate_finder.as_mut() {
         Some(s) => s,
         None => return,
     };
 
-    // Render tabs on the left.
-    let tabs = [crate::duplicate_types::ScanType::Exact, crate::duplicate_types::ScanType::Perceptual];
-    
-    // We can use a child UI to layout the tabs horizontally.
-    let mut title_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    // Render title and dropdown on the left.
+    let mut title_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
     title_ui.horizontal(|ui| {
-        ui.add_space(8.0);
-        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.add_space(12.0);
         
-        for tab in tabs {
-            let is_active = dup_state.active_tab == tab;
-            let is_scanning = match tab {
-                crate::duplicate_types::ScanType::Exact => dup_state.exact.scanning,
-                crate::duplicate_types::ScanType::Perceptual => dup_state.perceptual.scanning,
-            };
+        let text_color = ui.visuals().strong_text_color();
+        ui.add(egui::Label::new(
+            egui::RichText::new("Duplicate Files")
+                .font(egui::FontId::proportional(13.0))
+                .color(text_color)
+        ).selectable(false));
+        
+        ui.add_space(8.0);
 
-            // Custom tab button rendering
-            let text = tab.label();
-            
-            // Build tab button response
-            let button_height = rect.height() - 4.0; // small padding
-            let (button_rect, response) = ui.allocate_exact_size(
-                egui::vec2(110.0, button_height),
-                egui::Sense::click(),
-            );
-            
-            // Hover / active styling
-            let is_hovered = response.hovered();
-            
-            let bg_color = if is_active {
-                ui.visuals().widgets.active.bg_fill
-            } else if is_hovered {
-                ui.visuals().widgets.hovered.bg_fill
+        let active_scan_label = dup_state.active_tab.label();
+        let btn_res = ui.button(format!("{} ⏷", active_scan_label))
+            .on_hover_text("Choose duplicate detection method");
+
+        let mut dropdown_changed = false;
+        let mut next_active_tab = dup_state.active_tab;
+
+        if btn_res.clicked() {
+            if dup_state.show_dropdown {
+                dup_state.show_dropdown = false;
+                dup_state.dropdown_pos = None;
             } else {
-                egui::Color32::TRANSPARENT
-            };
-            
-            let text_color = if is_active {
-                ui.visuals().widgets.active.fg_stroke.color
-            } else if is_hovered {
-                ui.visuals().widgets.hovered.fg_stroke.color
-            } else {
-                ui.visuals().widgets.noninteractive.fg_stroke.color
-            };
-            
-            ui.painter().rect_filled(button_rect, 4.0, bg_color);
-            
-            // Center the label text and icon in the button
-            let font_id = egui::FontId::proportional(12.0);
-            
-            // We can draw a spinner/checkmark icon
-            let mut x_offset = button_rect.min.x + 8.0;
-            if is_scanning {
-                // Show a mini spinner/indicator
-                let spinner_center = egui::pos2(x_offset + 6.0, button_rect.center().y);
-                // Draw a simple loading circle
-                let t = ui.input(|i| i.time);
-                let angle = (t * 5.0) as f32;
-                let radius = 5.0;
-                let num_segments = 8;
-                for j in 0..num_segments {
-                    let seg_angle = angle + (j as f32) * (std::f32::consts::TAU / num_segments as f32);
-                    let pos = spinner_center + egui::vec2(seg_angle.cos(), seg_angle.sin()) * radius;
-                    let alpha = (j as f32 / num_segments as f32 * 255.0) as u8;
-                    ui.painter().circle_filled(pos, 1.2, text_color.linear_multiply(alpha as f32 / 255.0));
-                }
-                x_offset += 16.0;
-            } else if is_active {
-                // Draw checkmark
-                ui.painter().text(
-                    egui::pos2(x_offset, button_rect.center().y),
-                    egui::Align2::LEFT_CENTER,
-                    "✓",
-                    font_id.clone(),
-                    text_color,
-                );
-                x_offset += 14.0;
+                dup_state.show_dropdown = true;
+                dup_state.dropdown_pos = Some(egui::pos2(btn_res.rect.left(), btn_res.rect.bottom() + 4.0));
             }
-            
-            ui.painter().text(
-                egui::pos2(x_offset, button_rect.center().y),
-                egui::Align2::LEFT_CENTER,
-                text,
-                font_id,
-                text_color,
-            );
-            
-            if response.clicked() {
-                *action = DuplicateViewAction::SwitchTab(tab);
+        }
+
+        if dup_state.show_dropdown {
+            let popup_pos = dup_state.dropdown_pos.unwrap_or_else(|| egui::pos2(btn_res.rect.left(), btn_res.rect.bottom() + 4.0));
+            let popup_id = egui::Id::new("duplicate_method_dropdown");
+
+            let area_res = egui::Area::new(popup_id)
+                .fixed_pos(popup_pos)
+                .order(egui::Order::Tooltip)
+                .show(ui.ctx(), |ui| {
+                    egui::Frame::menu(ui.style()).show(ui, |ui| {
+                        ui.set_width(160.0);
+
+                        let options = [
+                            crate::duplicate_types::ScanType::Exact,
+                            crate::duplicate_types::ScanType::Perceptual,
+                        ];
+
+                        for option in options {
+                            let is_selected = dup_state.active_tab == option;
+                            let changed = crate::ui::menu_helpers::menu_row_button(
+                                ui,
+                                option.label(),
+                                "Set duplicate detection method",
+                                is_selected,
+                            );
+                            if changed {
+                                next_active_tab = option;
+                                dropdown_changed = true;
+                            }
+                        }
+                    });
+                });
+
+            if dropdown_changed {
+                dup_state.show_dropdown = false;
+                dup_state.dropdown_pos = None;
+                *action = DuplicateViewAction::SwitchTab(next_active_tab);
+            }
+
+            if dup_state.show_dropdown && ui.input(|i| i.pointer.any_pressed()) {
+                let clicked_outside = ui.ctx().pointer_interact_pos().map_or(false, |pos| {
+                    !area_res.response.rect.contains(pos) && !btn_res.rect.contains(pos)
+                });
+                if clicked_outside {
+                    dup_state.show_dropdown = false;
+                    dup_state.dropdown_pos = None;
+                }
             }
         }
     });

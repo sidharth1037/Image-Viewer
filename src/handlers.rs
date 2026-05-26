@@ -2055,7 +2055,7 @@ pub fn process_directory_scanning(app: &mut ImageApp) {
                 if app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder {
                     let paths = app.workspace.views[i].source_playlist.clone();
                     if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
-                        dup_state.start_all_scans(paths);
+                        dup_state.active_scan_mut().start_scan(paths);
                     }
                 }
             }
@@ -2425,9 +2425,9 @@ pub fn toggle_duplicate_finder(app: &mut ImageApp, ctx: &egui::Context) {
         // 3. Get source playlist from default view.
         let paths = app.workspace.active_view().source_playlist.clone();
 
-        // 4. Start background duplicate scan.
+        // 4. Start background duplicate scan for the active scan type.
         if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
-            dup_state.start_all_scans(paths);
+            dup_state.active_scan_mut().start_scan(paths);
         }
 
         // 5. Switch content mode to DuplicateFinder.
@@ -2669,9 +2669,19 @@ pub fn confirm_delete_file_dialog_duplicate(app: &mut ImageApp, time: f64) {
 }
 
 pub fn switch_duplicate_tab(app: &mut ImageApp, scan_type: crate::duplicate_types::ScanType) {
+    let paths = app.workspace.active_view().source_playlist.clone();
     if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
-        dup_state.active_tab = scan_type;
-        dup_state.active_group_index = None;
+        if dup_state.active_tab != scan_type {
+            // 1. Cancel currently running scan on the old active tab
+            dup_state.active_scan_mut().cancel_scan();
+            
+            // 2. Switch tab
+            dup_state.active_tab = scan_type;
+            dup_state.active_group_index = None;
+            
+            // 3. Start background duplicate scan for the new active tab
+            dup_state.active_scan_mut().start_scan(paths);
+        }
     }
 }
 
