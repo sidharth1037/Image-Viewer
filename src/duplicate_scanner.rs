@@ -1,71 +1,36 @@
 use std::collections::HashMap;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::Sender;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use sha2::{Digest, Sha256};
 
-/// Request to scan a list of files for duplicates.
-pub struct DuplicateScanRequest {
-    pub paths: Vec<PathBuf>,
-    pub request_id: u64,
-}
-
-/// Result of a duplicate scan: groups of identical files (each group has ≥ 2 members).
-pub struct DuplicateScanResult {
-    pub request_id: u64,
-    pub groups: Vec<Vec<PathBuf>>,
-}
+use crate::duplicate_types::ScanResult;
 
 /// Size of the partial-hash prefix in bytes.
 const PARTIAL_HASH_SIZE: usize = 4096;
 
-pub fn spawn_duplicate_scanner(
-    cancel_token: Arc<AtomicU64>,
-) -> (Sender<DuplicateScanRequest>, Receiver<DuplicateScanResult>) {
-    let (req_tx, req_rx) = channel::<DuplicateScanRequest>();
-    let (res_tx, res_rx) = channel::<DuplicateScanResult>();
-
-    std::thread::spawn(move || {
-        while let Ok(mut request) = req_rx.recv() {
-            // Drain to keep only the latest request.
-            while let Ok(newer) = req_rx.try_recv() {
-                request = newer;
-            }
-
-            if cancel_token.load(Ordering::Acquire) != request.request_id {
-                continue;
-            }
-
-            let groups = find_duplicates(&request.paths, &cancel_token, request.request_id);
-
-            if cancel_token.load(Ordering::Acquire) != request.request_id {
-                continue;
-            }
-
-            let _ = res_tx.send(DuplicateScanResult {
-                request_id: request.request_id,
-                groups,
-            });
-        }
-    });
-
-    (req_tx, res_rx)
-}
-
-fn find_duplicates(
+/// Exact-duplicate scan: size bucketing → partial SHA-256 → full SHA-256.
+///
+/// This is a pure scan function — no threading, no state management.
+/// It streams results by sending `ScanResult` snapshots through `result_tx`
+/// as size buckets are processed.
+pub fn exact_scan(
     paths: &[PathBuf],
     cancel_token: &Arc<AtomicU64>,
     request_id: u64,
-) -> Vec<Vec<PathBuf>> {
+    result_tx: &Sender<ScanResult>,
+) {
+    let total_files = paths.len();
+
     // Step 1: Bucket by file size.
     let mut size_buckets: HashMap<u64, Vec<PathBuf>> = HashMap::new();
 
     for path in paths {
         if cancel_token.load(Ordering::Acquire) != request_id {
-            return Vec::new();
+            return;
         }
         if let Ok(meta) = std::fs::metadata(path) {
             if meta.is_file() {
@@ -81,57 +46,92 @@ fn find_duplicates(
     size_buckets.retain(|_, files| files.len() >= 2);
 
     if size_buckets.is_empty() {
-        return Vec::new();
+        let _ = result_tx.send(ScanResult {
+            request_id,
+            groups: Vec::new(),
+            files_processed: total_files,
+            total_files,
+            is_complete: true,
+        });
+        return;
     }
 
-    // Step 2: For each size bucket, compute partial hashes.
-    let mut partial_hash_buckets: HashMap<(u64, [u8; 32]), Vec<PathBuf>> = HashMap::new();
+    // Step 2: For each size bucket, compute partial hashes, then full hashes.
+    // Stream results as each bucket is fully processed.
+    let mut all_groups: Vec<Vec<PathBuf>> = Vec::new();
+    let mut files_processed: usize;
+    // Count files NOT in any size bucket (already eliminated).
+    let files_in_buckets: usize = size_buckets.values().map(|v| v.len()).sum();
+    files_processed = total_files - files_in_buckets;
 
-    for (size, files) in &size_buckets {
-        for path in files {
+    for (_size, bucket_files) in &size_buckets {
+        // Partial hash within this bucket.
+        let mut partial_hash_map: HashMap<[u8; 32], Vec<PathBuf>> = HashMap::new();
+
+        for path in bucket_files {
             if cancel_token.load(Ordering::Acquire) != request_id {
-                return Vec::new();
+                return;
             }
             if let Some(hash) = partial_hash(path) {
-                partial_hash_buckets
-                    .entry((*size, hash))
-                    .or_default()
-                    .push(path.clone());
-            }
-        }
-    }
-
-    // Discard partial-hash buckets with only one file.
-    partial_hash_buckets.retain(|_, files| files.len() >= 2);
-
-    if partial_hash_buckets.is_empty() {
-        return Vec::new();
-    }
-
-    // Step 3: For remaining candidates, compute full file hash.
-    let mut full_hash_buckets: HashMap<[u8; 32], Vec<PathBuf>> = HashMap::new();
-
-    for (_, files) in &partial_hash_buckets {
-        for path in files {
-            if cancel_token.load(Ordering::Acquire) != request_id {
-                return Vec::new();
-            }
-            if let Some(hash) = full_hash(path) {
-                full_hash_buckets
+                partial_hash_map
                     .entry(hash)
                     .or_default()
                     .push(path.clone());
             }
         }
+
+        // Discard partial-hash groups with only one file.
+        partial_hash_map.retain(|_, files| files.len() >= 2);
+
+        // Full hash for remaining candidates.
+        let mut full_hash_map: HashMap<[u8; 32], Vec<PathBuf>> = HashMap::new();
+
+        for (_, candidates) in &partial_hash_map {
+            for path in candidates {
+                if cancel_token.load(Ordering::Acquire) != request_id {
+                    return;
+                }
+                if let Some(hash) = full_hash(path) {
+                    full_hash_map
+                        .entry(hash)
+                        .or_default()
+                        .push(path.clone());
+                }
+            }
+        }
+
+        // Keep only groups with >= 2 identical files.
+        for (_, group) in full_hash_map {
+            if group.len() >= 2 {
+                all_groups.push(group);
+            }
+        }
+
+        files_processed += bucket_files.len();
+
+        // Stream a snapshot after each bucket.
+        // Sort groups for stable ordering.
+        let mut snapshot = all_groups.clone();
+        snapshot.sort_by(|a, b| a[0].cmp(&b[0]));
+
+        let _ = result_tx.send(ScanResult {
+            request_id,
+            groups: snapshot,
+            files_processed,
+            total_files,
+            is_complete: false,
+        });
     }
 
-    // Keep only groups with ≥ 2 identical files.
-    full_hash_buckets.retain(|_, files| files.len() >= 2);
-
-    // Convert to Vec<Vec<PathBuf>>, sorted by first path in each group for stable ordering.
-    let mut groups: Vec<Vec<PathBuf>> = full_hash_buckets.into_values().collect();
-    groups.sort_by(|a, b| a[0].cmp(&b[0]));
-    groups
+    // Final result.
+    all_groups.sort_by(|a, b| a[0].cmp(&b[0]));
+    let _ = result_tx.send(ScanResult {
+        request_id,
+        groups: all_groups,
+        files_processed: total_files,
+        total_files,
+        is_complete: true,
+    });
 }
 
 fn partial_hash(path: &PathBuf) -> Option<[u8; 32]> {

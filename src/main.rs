@@ -20,6 +20,8 @@ mod handlers;
 mod workspace;
 mod duplicate_scanner;
 mod duplicate_state;
+mod duplicate_types;
+mod perceptual_scanner;
 mod sync;
 mod file_ops;
 #[cfg(windows)]

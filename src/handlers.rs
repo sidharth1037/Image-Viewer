@@ -208,7 +208,7 @@ pub fn confirm_delete_file_dialog(app: &mut ImageApp, time: f64) {
 
             if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
                 if dup_state.active_group_index.is_some() {
-                    dup_state.remove_paths(&[deleted_path.clone()]);
+                    dup_state.remove_paths_all(std::slice::from_ref(&deleted_path));
                     if let Some(state) = app.workspace.group_tabs.group_playlist_mut(crate::groups::DEFAULT_GROUP_ID) {
                         state.source_playlist.retain(|p| p != &deleted_path);
                         state.rebuild_active_playlist();
@@ -363,7 +363,7 @@ pub fn confirm_delete_file_dialog_playlist(app: &mut ImageApp, time: f64) {
 
     // Update duplicate finder groups if initialized.
     if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
-        dup_state.remove_paths(&deleted);
+        dup_state.remove_paths_all(&deleted);
     }
 
     // 6. For the default group, trigger a directory rescan so that the source
@@ -2055,7 +2055,7 @@ pub fn process_directory_scanning(app: &mut ImageApp) {
                 if app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder {
                     let paths = app.workspace.views[i].source_playlist.clone();
                     if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
-                        dup_state.start_scan(paths);
+                        dup_state.start_all_scans(paths);
                     }
                 }
             }
@@ -2425,13 +2425,9 @@ pub fn toggle_duplicate_finder(app: &mut ImageApp, ctx: &egui::Context) {
         // 3. Get source playlist from default view.
         let paths = app.workspace.active_view().source_playlist.clone();
 
-        // 4. Start background duplicate scan if paths changed in this session.
+        // 4. Start background duplicate scan.
         if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
-            let needs_scan = dup_state.last_scanned_paths.as_ref()
-                .map_or(true, |last_paths| *last_paths != paths);
-            if needs_scan {
-                dup_state.start_scan(paths);
-            }
+            dup_state.start_all_scans(paths);
         }
 
         // 5. Switch content mode to DuplicateFinder.
@@ -2442,7 +2438,7 @@ pub fn toggle_duplicate_finder(app: &mut ImageApp, ctx: &egui::Context) {
 /// Poll background scan channel and trigger repaint if new results arrive.
 pub fn process_duplicate_scanning(app: &mut ImageApp, ctx: &egui::Context) {
     if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
-        if dup_state.process_scan_results() {
+        if dup_state.process_all_results() {
             ctx.request_repaint();
         }
     }
@@ -2464,7 +2460,7 @@ pub fn duplicate_view_open_image(
     // 2. Configure active group row in DuplicateFinderState.
     let dup_state = app.workspace.duplicate_finder.as_mut().unwrap();
     dup_state.active_group_index = Some(group_index);
-    let paths = dup_state.groups[group_index].paths.clone();
+    let paths = dup_state.active_scan().groups[group_index].paths.clone();
 
     // 3. Set the active view's playlist state to only show the duplicates.
     let view = app.workspace.active_view_mut();
@@ -2525,10 +2521,11 @@ pub fn return_from_duplicate_canvas(app: &mut ImageApp) {
     // Restore focus/selection in duplicate finder state.
     if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
         if let Some(group_index) = dup_state.active_group_index {
-            if group_index < dup_state.groups.len() {
-                let total_items = dup_state.groups[group_index].paths.len();
+            let active_scan = dup_state.active_scan_mut();
+            if group_index < active_scan.groups.len() {
+                let total_items = active_scan.groups[group_index].paths.len();
                 if current_index < total_items {
-                    dup_state.groups[group_index].selection.select_single(current_index);
+                    active_scan.groups[group_index].selection.select_single(current_index);
                 }
             }
         }
@@ -2550,7 +2547,8 @@ pub fn return_from_duplicate_canvas(app: &mut ImageApp) {
 pub fn open_delete_file_dialog_for_duplicate_selection(app: &mut ImageApp, time: f64) {
     let mut selected_paths = Vec::new();
     if let Some(dup_state) = app.workspace.duplicate_finder.as_ref() {
-        for group in &dup_state.groups {
+        let active_scan = dup_state.active_scan();
+        for group in &active_scan.groups {
             for idx in group.selection.selected.iter() {
                 if let Some(path) = group.paths.get(*idx) {
                     selected_paths.push(path.clone());
@@ -2629,7 +2627,7 @@ pub fn confirm_delete_file_dialog_duplicate(app: &mut ImageApp, time: f64) {
 
     // 4. Update duplicate finder groups.
     if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
-        dup_state.remove_paths(&deleted);
+        dup_state.remove_paths_all(&deleted);
     }
 
     // 5. Evict deleted paths from the thumbnail cache.
@@ -2669,5 +2667,13 @@ pub fn confirm_delete_file_dialog_duplicate(app: &mut ImageApp, time: f64) {
     };
     set_overlay_message(app, time, &text);
 }
+
+pub fn switch_duplicate_tab(app: &mut ImageApp, scan_type: crate::duplicate_types::ScanType) {
+    if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+        dup_state.active_tab = scan_type;
+        dup_state.active_group_index = None;
+    }
+}
+
 
 

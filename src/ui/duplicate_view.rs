@@ -16,6 +16,8 @@ pub enum DuplicateViewAction {
         path: std::path::PathBuf,
         index_in_group: usize,
     },
+    /// Switch active duplicate tab.
+    SwitchTab(crate::duplicate_types::ScanType),
 }
 
 /// Render the duplicate finder view in the given UI rect.
@@ -37,20 +39,33 @@ pub fn render(
         content_rect.min,
         egui::vec2(content_rect.width(), TITLE_BAR_HEIGHT),
     );
-    render_title_bar(app, ui, title_rect);
-
-    // ── Content area (below title bar) ──────────────────────────────────
-    let body_rect = egui::Rect::from_min_max(
-        egui::pos2(content_rect.min.x, content_rect.min.y + TITLE_BAR_HEIGHT),
-        content_rect.max,
-    );
+    render_title_bar(app, ui, title_rect, &mut action);
 
     let dup_state = match app.workspace.duplicate_finder.as_mut() {
         Some(s) => s,
         None => return DuplicateViewAction::None,
     };
 
-    if dup_state.scanning {
+    let active_scan = dup_state.active_scan();
+    let is_scanning = active_scan.scanning;
+    let has_groups = !active_scan.groups.is_empty();
+    let progress_bar_height = if is_scanning { 20.0 } else { 0.0 };
+
+    if is_scanning {
+        let progress_rect = egui::Rect::from_min_size(
+            egui::pos2(content_rect.min.x, content_rect.min.y + TITLE_BAR_HEIGHT),
+            egui::vec2(content_rect.width(), progress_bar_height),
+        );
+        render_progress_bar(active_scan, ui, progress_rect);
+    }
+
+    // ── Content area (below title bar + progress bar if scanning) ──────────────────────────────────
+    let body_rect = egui::Rect::from_min_max(
+        egui::pos2(content_rect.min.x, content_rect.min.y + TITLE_BAR_HEIGHT + progress_bar_height),
+        content_rect.max,
+    );
+
+    if is_scanning && !has_groups {
         // Show scanning indicator.
         ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
             let area_rect = ui.max_rect();
@@ -65,11 +80,10 @@ pub fn render(
             group_ui.add_space(8.0);
             group_ui.add(egui::Label::new("Scanning for duplicates...").selectable(false));
         });
-        ctx.request_repaint();
-        return DuplicateViewAction::None;
+        return action;
     }
 
-    if dup_state.groups.is_empty() {
+    if !is_scanning && !has_groups {
         // No duplicates found.
         ui.scope_builder(egui::UiBuilder::new().max_rect(body_rect), |ui| {
             let area_rect = ui.max_rect();
@@ -85,13 +99,13 @@ pub fn render(
                     .selectable(false),
             );
         });
-        return DuplicateViewAction::None;
+        return action;
     }
 
     // ── Render duplicate groups ─────────────────────────────────────────
     let grid = match app.workspace.playlist_grid.as_mut() {
         Some(g) => g,
-        None => return DuplicateViewAction::None,
+        None => return action,
     };
 
     // Process any thumbnails that arrived since the last frame.
@@ -109,7 +123,7 @@ pub fn render(
     // We need to re-borrow dup_state after borrowing grid; this works because
     // they are on different fields of workspace.
     let dup_state = app.workspace.duplicate_finder.as_mut().unwrap();
-    let group_count = dup_state.groups.len();
+    let group_count = dup_state.active_scan().groups.len();
 
     // Collect all visible paths for lazy thumbnail loading.
     let mut all_visible_paths: Vec<std::path::PathBuf> = Vec::new();
@@ -122,7 +136,7 @@ pub fn render(
                 ui.add_space(ROW_PADDING_Y);
 
                 for group_idx in 0..group_count {
-                    let group = &dup_state.groups[group_idx];
+                    let group = &dup_state.active_scan().groups[group_idx];
                     let file_count = group.paths.len();
                     let paths_snapshot: Vec<std::path::PathBuf> = group.paths.clone();
 
@@ -221,7 +235,7 @@ pub fn render(
                                     );
 
                                     // Selection highlight.
-                                    let is_selected = dup_state.groups[group_idx]
+                                    let is_selected = dup_state.active_scan().groups[group_idx]
                                         .selection
                                         .is_selected(item_idx);
 
@@ -317,7 +331,7 @@ pub fn render(
                                     } else if response.clicked() {
                                         let modifiers = ui.input(|i| i.modifiers);
                                         let total_items = paths_snapshot.len();
-                                        dup_state.groups[group_idx]
+                                        dup_state.active_scan_mut().groups[group_idx]
                                             .selection
                                             .handle_click(
                                                 item_idx,
@@ -351,7 +365,12 @@ pub fn render(
 }
 
 /// Render the title bar strip at the top of the duplicate finder view.
-fn render_title_bar(app: &ImageApp, ui: &mut egui::Ui, rect: egui::Rect) {
+fn render_title_bar(
+    app: &ImageApp,
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    action: &mut DuplicateViewAction,
+) {
     let bg = ui.visuals().window_fill();
     ui.painter().rect_filled(rect, 0.0, bg);
 
@@ -362,29 +381,156 @@ fn render_title_bar(app: &ImageApp, ui: &mut egui::Ui, rect: egui::Rect) {
     );
     ui.painter().hline(rect.x_range(), rect.bottom(), sep_stroke);
 
-    // Title text.
-    let title = "Duplicate Files";
-    let title_color = ui.visuals().strong_text_color();
+    let dup_state = match app.workspace.duplicate_finder.as_ref() {
+        Some(s) => s,
+        None => return,
+    };
+
+    // Render tabs on the left.
+    let tabs = [crate::duplicate_types::ScanType::Exact, crate::duplicate_types::ScanType::Perceptual];
+    
+    // We can use a child UI to layout the tabs horizontally.
+    let mut title_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+    title_ui.horizontal(|ui| {
+        ui.add_space(8.0);
+        ui.spacing_mut().item_spacing.x = 4.0;
+        
+        for tab in tabs {
+            let is_active = dup_state.active_tab == tab;
+            let is_scanning = match tab {
+                crate::duplicate_types::ScanType::Exact => dup_state.exact.scanning,
+                crate::duplicate_types::ScanType::Perceptual => dup_state.perceptual.scanning,
+            };
+
+            // Custom tab button rendering
+            let text = tab.label();
+            
+            // Build tab button response
+            let button_height = rect.height() - 4.0; // small padding
+            let (button_rect, response) = ui.allocate_exact_size(
+                egui::vec2(110.0, button_height),
+                egui::Sense::click(),
+            );
+            
+            // Hover / active styling
+            let is_hovered = response.hovered();
+            
+            let bg_color = if is_active {
+                ui.visuals().widgets.active.bg_fill
+            } else if is_hovered {
+                ui.visuals().widgets.hovered.bg_fill
+            } else {
+                egui::Color32::TRANSPARENT
+            };
+            
+            let text_color = if is_active {
+                ui.visuals().widgets.active.fg_stroke.color
+            } else if is_hovered {
+                ui.visuals().widgets.hovered.fg_stroke.color
+            } else {
+                ui.visuals().widgets.noninteractive.fg_stroke.color
+            };
+            
+            ui.painter().rect_filled(button_rect, 4.0, bg_color);
+            
+            // Center the label text and icon in the button
+            let font_id = egui::FontId::proportional(12.0);
+            
+            // We can draw a spinner/checkmark icon
+            let mut x_offset = button_rect.min.x + 8.0;
+            if is_scanning {
+                // Show a mini spinner/indicator
+                let spinner_center = egui::pos2(x_offset + 6.0, button_rect.center().y);
+                // Draw a simple loading circle
+                let t = ui.input(|i| i.time);
+                let angle = (t * 5.0) as f32;
+                let radius = 5.0;
+                let num_segments = 8;
+                for j in 0..num_segments {
+                    let seg_angle = angle + (j as f32) * (std::f32::consts::TAU / num_segments as f32);
+                    let pos = spinner_center + egui::vec2(seg_angle.cos(), seg_angle.sin()) * radius;
+                    let alpha = (j as f32 / num_segments as f32 * 255.0) as u8;
+                    ui.painter().circle_filled(pos, 1.2, text_color.linear_multiply(alpha as f32 / 255.0));
+                }
+                x_offset += 16.0;
+            } else if is_active {
+                // Draw checkmark
+                ui.painter().text(
+                    egui::pos2(x_offset, button_rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    "✓",
+                    font_id.clone(),
+                    text_color,
+                );
+                x_offset += 14.0;
+            }
+            
+            ui.painter().text(
+                egui::pos2(x_offset, button_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                text,
+                font_id,
+                text_color,
+            );
+            
+            if response.clicked() {
+                *action = DuplicateViewAction::SwitchTab(tab);
+            }
+        }
+    });
+
+    // Stats on the right.
+    let active_scan = dup_state.active_scan();
+    let total_groups = active_scan.groups.len();
+    let total_files: usize = active_scan.groups.iter().map(|g| g.paths.len()).sum();
+    let stats = format!("{} groups, {} files", total_groups, total_files);
+    let stats_color = ui.visuals().weak_text_color();
+    ui.painter().text(
+        egui::pos2(rect.max.x - 12.0, rect.center().y),
+        egui::Align2::RIGHT_CENTER,
+        &stats,
+        egui::FontId::proportional(12.0),
+        stats_color,
+    );
+}
+
+/// Render the scanning progress bar.
+fn render_progress_bar(scan: &crate::duplicate_state::ScanState, ui: &mut egui::Ui, rect: egui::Rect) {
+    let bg = ui.visuals().widgets.noninteractive.bg_fill;
+    ui.painter().rect_filled(rect, 0.0, bg);
+
+    // Progress fraction
+    let fraction = scan.progress_fraction().unwrap_or(0.0);
+    let progress_width = rect.width() * fraction;
+    let progress_color = ui.visuals().selection.bg_fill;
+    
+    // Draw progress fill
+    let progress_fill_rect = egui::Rect::from_min_max(
+        rect.min,
+        egui::pos2(rect.min.x + progress_width, rect.max.y - 1.0),
+    );
+    ui.painter().rect_filled(progress_fill_rect, 0.0, progress_color);
+
+    // Draw bottom border for the progress bar area
+    let sep_stroke = egui::Stroke::new(
+        1.0,
+        ui.visuals().widgets.noninteractive.bg_stroke.color,
+    );
+    ui.painter().hline(rect.x_range(), rect.bottom() - 1.0, sep_stroke);
+
+    // Draw text in center / left
+    let text = format!(
+        "Scanning: {} / {} files ({}%)",
+        scan.files_processed,
+        scan.total_files,
+        (fraction * 100.0) as i32
+    );
+    
     ui.painter().text(
         egui::pos2(rect.min.x + 12.0, rect.center().y),
         egui::Align2::LEFT_CENTER,
-        title,
-        egui::FontId::proportional(13.0),
-        title_color,
+        &text,
+        egui::FontId::proportional(11.0),
+        ui.visuals().strong_text_color(),
     );
-
-    // Stats on the right.
-    if let Some(dup_state) = app.workspace.duplicate_finder.as_ref() {
-        let total_groups = dup_state.groups.len();
-        let total_files: usize = dup_state.groups.iter().map(|g| g.paths.len()).sum();
-        let stats = format!("{} groups, {} files", total_groups, total_files);
-        let stats_color = ui.visuals().weak_text_color();
-        ui.painter().text(
-            egui::pos2(rect.max.x - 12.0, rect.center().y),
-            egui::Align2::RIGHT_CENTER,
-            &stats,
-            egui::FontId::proportional(12.0),
-            stats_color,
-        );
-    }
 }

@@ -195,6 +195,11 @@ impl eframe::App for ImageApp {
         handlers::process_image_loading(self, ctx);
         handlers::process_directory_scanning(self);
         handlers::process_duplicate_scanning(self, ctx);
+        if let Some(dup_state) = self.workspace.duplicate_finder.as_ref() {
+            if dup_state.any_scanning() {
+                ctx.request_repaint();
+            }
+        }
         handlers::rebuild_adjusted_textures(self, ctx);
         handlers::process_move_animation(self, ctx);
         
@@ -279,6 +284,9 @@ impl eframe::App for ImageApp {
                         match action {
                             ui::duplicate_view::DuplicateViewAction::OpenImage { group_index, path, index_in_group } => {
                                 handlers::duplicate_view_open_image(self, group_index, path, index_in_group);
+                            }
+                            ui::duplicate_view::DuplicateViewAction::SwitchTab(scan_type) => {
+                                handlers::switch_duplicate_tab(self, scan_type);
                             }
                             ui::duplicate_view::DuplicateViewAction::None => {}
                         }
