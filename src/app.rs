@@ -260,14 +260,6 @@ impl eframe::App for ImageApp {
                     ui.painter().rect_filled(panel_rect, 0.0, bg);
 
                     let tabs_height = crate::ui::group_tabs::tabs_height(self);
-                    if tabs_height > 0.0 {
-                        let tabs_rect = egui::Rect::from_min_size(
-                            panel_rect.min,
-                            egui::vec2(panel_rect.width(), tabs_height),
-                        );
-                        crate::ui::group_tabs::render_in_rect(self, ctx, ui, tabs_rect);
-                    }
-
                     let content_rect = egui::Rect::from_min_max(
                         egui::pos2(panel_rect.min.x, panel_rect.min.y + tabs_height),
                         panel_rect.max,
@@ -276,7 +268,7 @@ impl eframe::App for ImageApp {
                     let show_duplicate_content = is_duplicate_finder
                         && self.workspace.group_tabs.selected_id == crate::groups::DEFAULT_GROUP_ID;
 
-                    if show_duplicate_content {
+                    let action_result = if show_duplicate_content {
                         let action = ui.scope_builder(egui::UiBuilder::new().max_rect(content_rect), |ui| {
                             crate::ui::duplicate_view::render(self, ctx, ui, content_rect)
                         })
@@ -296,7 +288,18 @@ impl eframe::App for ImageApp {
                             crate::ui::playlist_grid::render(self, ctx, ui)
                         })
                         .inner
+                    };
+
+                    // Render group tabs LAST so they are drawn ON TOP of the scroll/content area!
+                    if tabs_height > 0.0 {
+                        let tabs_rect = egui::Rect::from_min_size(
+                            panel_rect.min,
+                            egui::vec2(panel_rect.width(), tabs_height),
+                        );
+                        crate::ui::group_tabs::render_in_rect(self, ctx, ui, tabs_rect);
                     }
+
+                    action_result
                 });
 
             let grid_action = panel_output.inner;

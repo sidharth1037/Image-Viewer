@@ -68,6 +68,15 @@ impl UnionFind {
     }
 }
 
+use std::sync::OnceLock;
+use std::sync::Mutex;
+
+static PERCEPTUAL_HASH_CACHE: OnceLock<Mutex<HashMap<PathBuf, image_hasher::ImageHash>>> = OnceLock::new();
+
+fn get_perceptual_hash_cache() -> &'static Mutex<HashMap<PathBuf, image_hasher::ImageHash>> {
+    PERCEPTUAL_HASH_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 // ── Scan function ───────────────────────────────────────────────────────────
 
 /// Perceptual-duplicate scan: image hashing → pairwise comparison → union-find grouping.
@@ -109,7 +118,21 @@ pub fn perceptual_scan(
             return;
         }
 
-        if let Ok(img) = image::open(path) {
+        let cached_hash = {
+            let cache = get_perceptual_hash_cache().lock().unwrap();
+            cache.get(path).cloned()
+        };
+
+        if let Some(new_hash) = cached_hash {
+            // Compare against all previously hashed images immediately.
+            for &(prev_idx, ref prev_hash) in &hashes {
+                if new_hash.dist(prev_hash) <= PERCEPTUAL_THRESHOLD {
+                    uf.union(i, prev_idx);
+                }
+            }
+
+            hashes.push((i, new_hash));
+        } else if let Ok(img) = image::open(path) {
             let new_hash = hasher.hash_image(&img);
 
             // Compare against all previously hashed images immediately.
@@ -118,6 +141,9 @@ pub fn perceptual_scan(
                     uf.union(i, prev_idx);
                 }
             }
+
+            let mut cache = get_perceptual_hash_cache().lock().unwrap();
+            cache.insert(path.clone(), new_hash.clone());
 
             hashes.push((i, new_hash));
         }

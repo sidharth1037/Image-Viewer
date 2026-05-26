@@ -628,6 +628,22 @@ pub fn switch_group(app: &mut ImageApp, group_id: u32) {
         .unwrap_or_else(crate::groups::GroupPlaylistState::new);
 
     apply_group_playlist_state(app, &next_state);
+
+    // Pause/Resume duplicate scans when switching group tabs
+    if app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder {
+        if group_id == crate::groups::DEFAULT_GROUP_ID {
+            // Switched back to Default Group (duplicate view active) -> Resume/Start scan
+            let paths = app.workspace.active_view().source_playlist.clone();
+            if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+                dup_state.active_scan_mut().start_scan(paths);
+            }
+        } else if current_group_id == crate::groups::DEFAULT_GROUP_ID {
+            // Switched away from Default Group (duplicate view hidden) -> Pause running scans
+            if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+                dup_state.clear();
+            }
+        }
+    }
 }
 
 pub fn close_group_tab(app: &mut ImageApp, group_id: u32) {
@@ -2518,6 +2534,8 @@ pub fn return_from_duplicate_canvas(app: &mut ImageApp) {
     // Return to DuplicateFinder mode.
     app.workspace.content_mode = crate::workspace::ContentMode::DuplicateFinder;
 
+    let paths = app.workspace.active_view().source_playlist.clone();
+
     // Restore focus/selection in duplicate finder state.
     if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
         if let Some(group_index) = dup_state.active_group_index {
@@ -2530,6 +2548,9 @@ pub fn return_from_duplicate_canvas(app: &mut ImageApp) {
             }
         }
         dup_state.active_group_index = None;
+
+        // Resume/Start scan if it was paused/incomplete
+        dup_state.active_scan_mut().start_scan(paths);
     }
 
     if app.workspace.is_split() {

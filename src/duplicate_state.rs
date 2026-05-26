@@ -62,10 +62,11 @@ impl ScanState {
     /// Start a scan if the path set has changed since the last scan.
     /// Returns `true` if a new scan was triggered.
     pub fn start_scan(&mut self, paths: Vec<PathBuf>) -> bool {
+        let is_incomplete = self.files_processed < paths.len() && !self.scanning;
         let needs_scan = self
             .last_scanned_paths
             .as_ref()
-            .map_or(true, |last| *last != paths);
+            .is_none_or(|last| *last != paths) || is_incomplete;
         if needs_scan {
             self.force_scan(paths);
             true
@@ -138,7 +139,7 @@ impl ScanState {
     /// Clear transient state (e.g. when leaving duplicate finder mode).
     /// Keeps the session cache so re-entering skips redundant scans.
     pub fn clear(&mut self) {
-        self.scanning = false;
+        self.cancel_scan();
     }
 
     /// Cancel the currently running scan.

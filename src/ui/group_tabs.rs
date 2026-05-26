@@ -31,11 +31,14 @@ pub fn render_in_rect(app: &mut ImageApp, _ctx: &egui::Context, ui: &mut egui::U
     let visuals = ui.style().visuals.clone();
     let bg_fill = visuals.window_fill();
 
-    ui.painter().rect_filled(rect, 0.0, bg_fill);
+    // Expand background rect slightly downwards by 1.0px to prevent sub-pixel gaps!
+    let bg_rect = egui::Rect::from_min_max(rect.min, egui::pos2(rect.max.x, rect.max.y + 1.0));
+    ui.painter().rect_filled(bg_rect, 0.0, bg_fill);
 
     let separator_stroke = egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color);
+    // Draw hline exactly at bottom + 0.5 to keep it at the very bottom edge of the expanded background!
     ui.painter()
-        .hline(rect.x_range(), rect.bottom(), separator_stroke);
+        .hline(rect.x_range(), rect.bottom() + 0.5, separator_stroke);
 
     let mut add_rect = rect;
     add_rect.max.x = (rect.min.x + ADD_BUTTON_WIDTH).min(rect.max.x);

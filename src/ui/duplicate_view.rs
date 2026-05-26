@@ -18,12 +18,10 @@ pub enum DuplicateViewAction {
     },
     /// Switch active duplicate tab.
     SwitchTab(crate::duplicate_types::ScanType),
-}
-
-/// Render the duplicate finder view in the given UI rect.
+}/// Render the duplicate finder view in the given UI rect.
 ///
 /// The layout is:
-///   1. Title bar ("Duplicate Files" + stats)
+///   1. Title bar ("Duplicate Files" + dropdown + stats)
 ///   2. Vertically scrollable area containing duplicate groups
 ///   3. Each group: header + horizontally scrollable row of thumbnails
 pub fn render(
@@ -34,13 +32,6 @@ pub fn render(
 ) -> DuplicateViewAction {
     let mut action = DuplicateViewAction::None;
 
-    // ── Title bar ───────────────────────────────────────────────────────
-    let title_rect = egui::Rect::from_min_size(
-        content_rect.min,
-        egui::vec2(content_rect.width(), TITLE_BAR_HEIGHT),
-    );
-    render_title_bar(app, ui, title_rect, &mut action);
-
     let dup_state = match app.workspace.duplicate_finder.as_mut() {
         Some(s) => s,
         None => return DuplicateViewAction::None,
@@ -50,14 +41,6 @@ pub fn render(
     let is_scanning = active_scan.scanning;
     let has_groups = !active_scan.groups.is_empty();
     let progress_bar_height = if is_scanning { 20.0 } else { 0.0 };
-
-    if is_scanning {
-        let progress_rect = egui::Rect::from_min_size(
-            egui::pos2(content_rect.min.x, content_rect.min.y + TITLE_BAR_HEIGHT),
-            egui::vec2(content_rect.width(), progress_bar_height),
-        );
-        render_progress_bar(active_scan, ui, progress_rect);
-    }
 
     // ── Content area (below title bar + progress bar if scanning) ──────────────────────────────────
     let body_rect = egui::Rect::from_min_max(
@@ -80,6 +63,23 @@ pub fn render(
             group_ui.add_space(8.0);
             group_ui.add(egui::Label::new("Scanning for duplicates...").selectable(false));
         });
+
+        // Draw title bar and progress bar ON TOP!
+        let title_rect = egui::Rect::from_min_size(
+            content_rect.min,
+            egui::vec2(content_rect.width(), TITLE_BAR_HEIGHT),
+        );
+        render_title_bar(app, ui, title_rect, &mut action);
+
+        if is_scanning {
+            let progress_rect = egui::Rect::from_min_size(
+                egui::pos2(content_rect.min.x, content_rect.min.y + TITLE_BAR_HEIGHT),
+                egui::vec2(content_rect.width(), progress_bar_height),
+            );
+            let dup_state = app.workspace.duplicate_finder.as_ref().unwrap();
+            render_progress_bar(dup_state.active_scan(), ui, progress_rect);
+        }
+
         return action;
     }
 
@@ -99,13 +99,29 @@ pub fn render(
                     .selectable(false),
             );
         });
+
+        // Draw title bar ON TOP!
+        let title_rect = egui::Rect::from_min_size(
+            content_rect.min,
+            egui::vec2(content_rect.width(), TITLE_BAR_HEIGHT),
+        );
+        render_title_bar(app, ui, title_rect, &mut action);
+
         return action;
     }
 
     // ── Render duplicate groups ─────────────────────────────────────────
     let grid = match app.workspace.playlist_grid.as_mut() {
         Some(g) => g,
-        None => return action,
+        None => {
+            // Draw title bar even if grid is missing
+            let title_rect = egui::Rect::from_min_size(
+                content_rect.min,
+                egui::vec2(content_rect.width(), TITLE_BAR_HEIGHT),
+            );
+            render_title_bar(app, ui, title_rect, &mut action);
+            return action;
+        }
     };
 
     // Process any thumbnails that arrived since the last frame.
@@ -361,6 +377,22 @@ pub fn render(
         grid.request_thumbnails_for_paths(&all_visible_paths);
     }
 
+    // ── Draw Title Bar & Progress Bar ON TOP of scroll area! ────────────────────────
+    let title_rect = egui::Rect::from_min_size(
+        content_rect.min,
+        egui::vec2(content_rect.width(), TITLE_BAR_HEIGHT),
+    );
+    render_title_bar(app, ui, title_rect, &mut action);
+
+    if is_scanning {
+        let progress_rect = egui::Rect::from_min_size(
+            egui::pos2(content_rect.min.x, content_rect.min.y + TITLE_BAR_HEIGHT),
+            egui::vec2(content_rect.width(), progress_bar_height),
+        );
+        let dup_state = app.workspace.duplicate_finder.as_ref().unwrap();
+        render_progress_bar(dup_state.active_scan(), ui, progress_rect);
+    }
+
     action
 }
 
@@ -381,8 +413,8 @@ fn render_title_bar(
         1.0,
         ui.visuals().widgets.noninteractive.bg_stroke.color,
     );
-    // Draw hline exactly at bottom - 0.5 to keep it inside the background!
-    ui.painter().hline(rect.x_range(), rect.bottom() - 0.5, sep_stroke);
+    // Draw hline exactly at bottom + 0.5 to keep it at the very bottom edge of the expanded background!
+    ui.painter().hline(rect.x_range(), rect.bottom() + 0.5, sep_stroke);
 
     let dup_state = match app.workspace.duplicate_finder.as_mut() {
         Some(s) => s,

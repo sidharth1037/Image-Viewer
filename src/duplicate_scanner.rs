@@ -64,7 +64,7 @@ pub fn exact_scan(
     let files_in_buckets: usize = size_buckets.values().map(|v| v.len()).sum();
     files_processed = total_files - files_in_buckets;
 
-    for (_size, bucket_files) in &size_buckets {
+    for bucket_files in size_buckets.values() {
         // Partial hash within this bucket.
         let mut partial_hash_map: HashMap<[u8; 32], Vec<PathBuf>> = HashMap::new();
 
@@ -86,7 +86,7 @@ pub fn exact_scan(
         // Full hash for remaining candidates.
         let mut full_hash_map: HashMap<[u8; 32], Vec<PathBuf>> = HashMap::new();
 
-        for (_, candidates) in &partial_hash_map {
+        for candidates in partial_hash_map.values() {
             for path in candidates {
                 if cancel_token.load(Ordering::Acquire) != request_id {
                     return;
@@ -134,7 +134,28 @@ pub fn exact_scan(
     });
 }
 
+use std::sync::{Mutex, OnceLock};
+
+static PARTIAL_HASH_CACHE: OnceLock<Mutex<HashMap<PathBuf, [u8; 32]>>> = OnceLock::new();
+static FULL_HASH_CACHE: OnceLock<Mutex<HashMap<PathBuf, [u8; 32]>>> = OnceLock::new();
+
+fn get_partial_hash_cache() -> &'static Mutex<HashMap<PathBuf, [u8; 32]>> {
+    PARTIAL_HASH_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn get_full_hash_cache() -> &'static Mutex<HashMap<PathBuf, [u8; 32]>> {
+    FULL_HASH_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
 fn partial_hash(path: &PathBuf) -> Option<[u8; 32]> {
+    let cached = {
+        let cache = get_partial_hash_cache().lock().unwrap();
+        cache.get(path).cloned()
+    };
+    if let Some(hash) = cached {
+        return Some(hash);
+    }
+
     let mut file = std::fs::File::open(path).ok()?;
     let mut buffer = vec![0u8; PARTIAL_HASH_SIZE];
     let bytes_read = file.read(&mut buffer).ok()?;
@@ -142,10 +163,22 @@ fn partial_hash(path: &PathBuf) -> Option<[u8; 32]> {
 
     let mut hasher = Sha256::new();
     hasher.update(&buffer);
-    Some(hasher.finalize().into())
+    let hash: [u8; 32] = hasher.finalize().into();
+
+    let mut cache = get_partial_hash_cache().lock().unwrap();
+    cache.insert(path.clone(), hash);
+    Some(hash)
 }
 
 fn full_hash(path: &PathBuf) -> Option<[u8; 32]> {
+    let cached = {
+        let cache = get_full_hash_cache().lock().unwrap();
+        cache.get(path).cloned()
+    };
+    if let Some(hash) = cached {
+        return Some(hash);
+    }
+
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = Sha256::new();
     let mut buffer = [0u8; 8192];
@@ -158,5 +191,10 @@ fn full_hash(path: &PathBuf) -> Option<[u8; 32]> {
         hasher.update(&buffer[..bytes_read]);
     }
 
-    Some(hasher.finalize().into())
+    let hash: [u8; 32] = hasher.finalize().into();
+
+    let mut cache = get_full_hash_cache().lock().unwrap();
+    cache.insert(path.clone(), hash);
+    Some(hash)
 }
+
