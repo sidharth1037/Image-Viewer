@@ -184,18 +184,28 @@ fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
             })
             .unwrap_or((0, 0, 0));
 
+        let is_scanning = app.workspace.active_view().scanning_in_progress;
         let total_label = if total_items == 1 { "item" } else { "items" };
-        let right_text = format!(
-            "{} {} | {}",
-            total_items,
-            total_label,
-            format_file_size(total_size_bytes)
-        );
+        let right_text = if is_scanning {
+            format!(
+                "Scanning...  |  {} {}  |  {}",
+                total_items,
+                total_label,
+                format_file_size(total_size_bytes)
+            )
+        } else {
+            format!(
+                "{} {}  |  {}",
+                total_items,
+                total_label,
+                format_file_size(total_size_bytes)
+            )
+        };
 
         let left_text = if selected_count > 0 {
             let selected_label = if selected_count == 1 { "item" } else { "items" };
             Some(format!(
-                "{} | {} {} selected",
+                "{}  |  {} {} selected",
                 format_file_size(selected_size_bytes),
                 selected_count,
                 selected_label
@@ -272,7 +282,13 @@ fn render_content(app: &mut ImageApp, ctx: &egui::Context, ui: &mut egui::Ui) {
     // Restored to horizontal_centered to guarantee text correctly anchors to the far left and far right edges.
     ui.horizontal_centered(|ui| {
         ui.add_space(8.0);
-        let left_label = ui.label(format!("{}  |  {}", size_text, resolution_text));
+        let is_scanning = app.workspace.active_view().scanning_in_progress;
+        let left_text_content = if is_scanning {
+            format!("Scanning...  |  {}  |  {}", size_text, resolution_text)
+        } else {
+            format!("{}  |  {}", size_text, resolution_text)
+        };
+        let left_label = ui.label(left_text_content);
         if left_label.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         }

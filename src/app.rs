@@ -195,6 +195,9 @@ impl eframe::App for ImageApp {
         handlers::process_image_loading(self, ctx);
         handlers::process_directory_scanning(self);
         handlers::process_duplicate_scanning(self, ctx);
+        if self.workspace.active_view().scanning_in_progress {
+            ctx.request_repaint();
+        }
         if let Some(dup_state) = self.workspace.duplicate_finder.as_ref() {
             if dup_state.any_scanning() {
                 ctx.request_repaint();

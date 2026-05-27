@@ -52,6 +52,39 @@ pub fn render(
         return render_empty_folder(ui);
     }
 
+    if is_scanning {
+        ctx.request_repaint();
+        let banner_height = 28.0;
+        let (rect, _) = ui.allocate_exact_size(
+            egui::vec2(ui.available_width(), banner_height),
+            egui::Sense::hover(),
+        );
+
+        let bg_color = ui.visuals().widgets.noninteractive.bg_fill;
+        ui.painter().rect_filled(rect, 4.0, bg_color);
+
+        let mut child_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+        );
+        child_ui.add_space(12.0);
+        child_ui.add(egui::Spinner::new().size(14.0));
+        child_ui.add_space(8.0);
+        child_ui.add(egui::Label::new(
+            egui::RichText::new("Scanning folder...")
+                .font(egui::FontId::proportional(12.0))
+                .color(ui.visuals().strong_text_color())
+        ).selectable(false));
+
+        let stroke = egui::Stroke::new(
+            1.0,
+            ui.visuals().widgets.noninteractive.bg_stroke.color,
+        );
+        ui.painter().hline(rect.x_range(), rect.bottom(), stroke);
+        ui.add_space(4.0);
+    }
+
     let settings = &grid.settings;
     let thumb_w = settings.thumbnail_width as f32;
     let max_thumb_h = thumb_w * settings.max_height_ratio;
