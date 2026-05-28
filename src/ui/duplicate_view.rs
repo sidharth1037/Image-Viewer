@@ -136,6 +136,11 @@ pub fn render(
     let row_height = max_thumb_h + label_h;
     let spacing_x = grid.settings.item_spacing_x;
 
+    let cell_pad_x = 6.0;
+    let cell_pad_top = 6.0;
+    let cell_pad_bottom = 6.0;
+    let cell_height = row_height + cell_pad_top + cell_pad_bottom;
+
     // We need to re-borrow dup_state after borrowing grid; this works because
     // they are on different fields of workspace.
     let dup_state = app.workspace.duplicate_finder.as_mut().unwrap();
@@ -165,7 +170,7 @@ pub fn render(
                     let header_text = format!("Group {} — {} files", group_idx + 1, file_count);
                     let header_color = ui.visuals().weak_text_color();
                     ui.painter().text(
-                        egui::pos2(header_rect.min.x + 8.0, header_rect.center().y),
+                        egui::pos2(header_rect.min.x + 12.0, header_rect.center().y),
                         egui::Align2::LEFT_CENTER,
                         &header_text,
                         egui::FontId::proportional(12.0),
@@ -186,13 +191,13 @@ pub fn render(
                     // ── Horizontally scrollable thumbnail row ──
                     let scroll_id = egui::Id::new(("dup_row_scroll", group_idx));
                     let (row_rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), row_height + ROW_PADDING_Y * 2.0),
+                        egui::vec2(ui.available_width(), cell_height + ROW_PADDING_Y * 2.0),
                         egui::Sense::hover(),
                     );
 
                     let inner_row_rect = egui::Rect::from_min_max(
-                        egui::pos2(row_rect.min.x, row_rect.min.y + ROW_PADDING_Y),
-                        egui::pos2(row_rect.max.x, row_rect.max.y - ROW_PADDING_Y),
+                        egui::pos2(row_rect.min.x + 12.0, row_rect.min.y + ROW_PADDING_Y),
+                        egui::pos2(row_rect.max.x - 12.0, row_rect.max.y - ROW_PADDING_Y),
                     );
 
                     // Only render if the row is visible.
@@ -232,7 +237,7 @@ pub fn render(
                                         (thumb_w, thumb_w * aspect)
                                     };
 
-                                    let cell_size = egui::vec2(thumb_w, row_height);
+                                    let cell_size = egui::vec2(thumb_w + cell_pad_x * 2.0, cell_height);
                                     let (cell_rect, response) =
                                         ui.allocate_exact_size(cell_size, egui::Sense::click());
 
@@ -240,13 +245,13 @@ pub fn render(
                                     let thumb_x_offset = (thumb_w - item_thumb_w) / 2.0;
                                     let thumb_rect = egui::Rect::from_min_size(
                                         egui::pos2(
-                                            cell_rect.min.x + thumb_x_offset,
-                                            cell_rect.min.y + thumb_y_offset,
+                                            cell_rect.min.x + cell_pad_x + thumb_x_offset,
+                                            cell_rect.min.y + cell_pad_top + thumb_y_offset,
                                         ),
                                         egui::vec2(item_thumb_w, item_thumb_h),
                                     );
                                     let label_rect = egui::Rect::from_min_size(
-                                        egui::pos2(cell_rect.min.x, cell_rect.min.y + max_thumb_h),
+                                        egui::pos2(cell_rect.min.x + cell_pad_x, cell_rect.min.y + cell_pad_top + max_thumb_h),
                                         egui::vec2(thumb_w, label_h),
                                     );
 
