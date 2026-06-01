@@ -12,6 +12,8 @@ pub enum PlaylistGridAction {
     OpenFile,
     /// User clicked "Open Folder" in the empty-folder placeholder.
     OpenFolder,
+    /// User right-clicked — open context menu at this position.
+    ContextMenu { pos: egui::Pos2 },
 }
 
 /// Render the playlist grid inside the given UI region.
@@ -377,6 +379,17 @@ pub fn render(
                         total_items,
                     );
                     grid.refresh_selected_size_cache(playlist);
+                }
+
+                // Right-click: auto-select if not selected, then fire context menu.
+                if response.secondary_clicked() {
+                    if !grid.selection.is_selected(item_idx) {
+                        grid.selection.select_single(item_idx);
+                        grid.refresh_selected_size_cache(playlist);
+                    }
+                    if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                        action = PlaylistGridAction::ContextMenu { pos };
+                    }
                 }
 
                 if app.settings.groups_enabled && response.drag_started() {

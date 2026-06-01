@@ -2706,5 +2706,195 @@ pub fn switch_duplicate_tab(app: &mut ImageApp, scan_type: crate::duplicate_type
     }
 }
 
+// ── Context Menu ────────────────────────────────────────────────────────────
 
+/// Open the context menu at the given position with view-appropriate items.
+pub fn open_context_menu(app: &mut ImageApp, pos: egui::Pos2) {
+    use crate::ui::context_menu::items;
+    use crate::workspace::ContentMode;
 
+    let entries = match app.workspace.content_mode {
+        ContentMode::Canvas | ContentMode::Empty => items::canvas_items(app),
+        ContentMode::PlaylistGrid => items::playlist_items(app),
+        ContentMode::DuplicateFinder => items::duplicate_items(app),
+    };
+
+    app.context_menu.open(pos, entries);
+}
+
+/// Dispatch a context menu action by its string ID to existing handler functions.
+pub fn dispatch_context_menu_action(
+    app: &mut ImageApp,
+    ctx: &egui::Context,
+    action: &crate::ui::context_menu::ContextMenuAction,
+) {
+    let time = ctx.input(|i| i.time);
+
+    match action.id {
+        "rotate_clockwise" => {
+            let active_view = app.workspace.active_view_mut();
+            active_view.rotation_quarter_turns = (active_view.rotation_quarter_turns + 1) % 4;
+            active_view.adjustments_dirty = true;
+        }
+
+        "save_adjustments" => {
+            open_save_overwrite_dialog(app, time);
+        }
+
+        "reveal_in_explorer" => {
+            let is_playlist = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
+            let is_duplicate = app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder;
+
+            if is_playlist {
+                // Reveal the first selected file.
+                let path_to_reveal = if let Some(grid) = app.workspace.playlist_grid.as_ref() {
+                    if let Some(&idx) = grid.selection.selected.iter().next() {
+                        app.workspace.active_view().active_playlist.get(idx).cloned()
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(path) = path_to_reveal {
+                    reveal_path_in_explorer(&path, app, time);
+                    return;
+                }
+            } else if is_duplicate {
+                // Reveal the first selected file from duplicate groups.
+                let path_to_reveal = if let Some(dup_state) = app.workspace.duplicate_finder.as_ref() {
+                    dup_state.active_scan().groups.iter().find_map(|group| {
+                        if let Some(&idx) = group.selection.selected.iter().next() {
+                            group.paths.get(idx).cloned()
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
+
+                if let Some(path) = path_to_reveal {
+                    reveal_path_in_explorer(&path, app, time);
+                    return;
+                }
+            } else {
+                // Canvas: reveal current file.
+                reveal_current_in_explorer(app, time);
+            }
+        }
+
+        "copy_path" => {
+            let is_playlist = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
+            let is_duplicate = app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder;
+
+            let path_string = if is_playlist {
+                app.workspace.playlist_grid.as_ref().and_then(|grid| {
+                    grid.selection.selected.iter().next().and_then(|&idx| {
+                        app.workspace.active_view().active_playlist.get(idx)
+                            .map(|p| p.to_string_lossy().into_owned())
+                    })
+                })
+            } else if is_duplicate {
+                app.workspace.duplicate_finder.as_ref().and_then(|dup_state| {
+                    for group in &dup_state.active_scan().groups {
+                        if let Some(&idx) = group.selection.selected.iter().next() {
+                            if let Some(path) = group.paths.get(idx) {
+                                return Some(path.to_string_lossy().into_owned());
+                            }
+                        }
+                    }
+                    None
+                })
+            } else {
+                app.workspace.active_view().current_file_path.as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+            };
+
+            if let Some(text) = path_string {
+                ctx.copy_text(text);
+                set_overlay_message(app, time, "Path copied to clipboard");
+            }
+        }
+
+        "delete" => {
+            let is_playlist = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
+            let is_duplicate = app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder;
+
+            if is_playlist {
+                open_delete_file_dialog_for_selection(app, time);
+            } else if is_duplicate {
+                open_delete_file_dialog_for_duplicate_selection(app, time);
+            } else {
+                open_delete_file_dialog(app, time);
+            }
+        }
+
+        "open_image" => {
+            let is_playlist = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
+            let is_duplicate = app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder;
+
+            if is_playlist {
+                if let Some(grid) = app.workspace.playlist_grid.as_ref() {
+                    if let Some(&idx) = grid.selection.selected.iter().next() {
+                        if let Some(path) = app.workspace.active_view().active_playlist.get(idx) {
+                            let path = path.clone();
+                            playlist_grid_open_image(app, path, idx);
+                        }
+                    }
+                }
+            } else if is_duplicate {
+                if let Some(dup_state) = app.workspace.duplicate_finder.as_ref() {
+                    for (group_idx, group) in dup_state.active_scan().groups.iter().enumerate() {
+                        if let Some(&idx) = group.selection.selected.iter().next() {
+                            if let Some(path) = group.paths.get(idx) {
+                                let path = path.clone();
+                                duplicate_view_open_image(app, group_idx, path, idx);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        "select_all" => {
+            let playlist = app.workspace.active_view().active_playlist.clone();
+            let total_items = playlist.len();
+            if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+                grid.selection.select_all(total_items);
+                grid.refresh_selected_size_cache(&playlist);
+                set_overlay_message(app, time, "Selected all items");
+            }
+        }
+
+        _ => {}
+    }
+}
+
+fn reveal_path_in_explorer(path: &std::path::Path, app: &mut ImageApp, time: f64) {
+    #[cfg(windows)]
+    {
+        let absolute_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        };
+
+        let launched = reveal_in_explorer_windows(&absolute_path).is_ok();
+        if launched {
+            set_overlay_message(app, time, "Revealed in Explorer");
+        } else {
+            set_overlay_message(app, time, "Failed to open Explorer");
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        set_overlay_message(app, time, "Reveal is only available on Windows");
+    }
+}

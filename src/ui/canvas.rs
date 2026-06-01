@@ -121,8 +121,9 @@ pub fn render(
     is_split: bool,
     immersive_topbar_visible: bool,
     allow_interaction: bool,
-) -> (Option<i32>, egui::Rect) {
+) -> (Option<i32>, egui::Rect, bool) {
     let mut nav_action = None;
+    let mut context_menu_requested = false;
 
     // In split view, allocate a focus indicator strip before the canvas.
     // This pushes the canvas content down so the indicator never overlaps the image.
@@ -258,6 +259,11 @@ pub fn render(
                 nav_action = Some(1);
             }
         }
+    }
+
+    // Right-click detection for context menu.
+    if allow_interaction && response.secondary_clicked() {
+        context_menu_requested = true;
     }
 
     // Zoom Input: Handles double-click actions for fitted vs non-fitted states.
@@ -547,5 +553,5 @@ pub fn render(
         }
     }
 
-    (nav_action, response.rect)
+    (nav_action, response.rect, context_menu_requested)
 }

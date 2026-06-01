@@ -18,6 +18,8 @@ pub enum DuplicateViewAction {
     },
     /// Switch active duplicate tab.
     SwitchTab(crate::duplicate_types::ScanType),
+    /// User right-clicked — open context menu at this position.
+    ContextMenu { pos: egui::Pos2 },
 }/// Render the duplicate finder view in the given UI rect.
 ///
 /// The layout is:
@@ -360,6 +362,18 @@ pub fn render(
                                                 modifiers.shift,
                                                 total_items,
                                             );
+                                    }
+
+                                    // Right-click: auto-select if not selected, then fire context menu.
+                                    if response.secondary_clicked() {
+                                        if !is_selected {
+                                            dup_state.active_scan_mut().groups[group_idx]
+                                                .selection
+                                                .select_single(item_idx);
+                                        }
+                                        if let Some(pos) = ui.ctx().pointer_interact_pos() {
+                                            action = DuplicateViewAction::ContextMenu { pos };
+                                        }
                                     }
 
                                     if response.hovered() {

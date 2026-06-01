@@ -7,6 +7,7 @@ use crate::sync::pan_zoom::PanZoomSnapshot;
 pub struct SplitLayoutResult {
     pub nav_action: Option<i32>,
     pub active_canvas_rect: egui::Rect,
+    pub context_menu_requested: bool,
 }
 
 pub fn render(
@@ -24,6 +25,8 @@ pub fn render(
         let active_index = app.workspace.active_view_index;
         let mut left_rect = egui::Rect::NOTHING;
         let mut right_rect = egui::Rect::NOTHING;
+        let mut left_ctx_menu = false;
+        let mut right_ctx_menu = false;
         let can_enable_sync = crate::sync::pan_zoom::can_enable_sync(app);
         if !app.split_pan_zoom_sync_user_disabled && !app.split_pan_zoom_sync_enabled && can_enable_sync {
             app.split_pan_zoom_sync_enabled = true;
@@ -34,7 +37,7 @@ pub fn render(
         pass_through_ui.columns(2, |columns| {
             // Left (cloned side) = index 1
             let left_pre = PanZoomSnapshot::from_state(&app.workspace.views[1]);
-            let (nav, rect) = crate::ui::canvas::render(
+            let (nav, rect, ctx_menu) = crate::ui::canvas::render(
                 ctx,
                 &mut columns[0],
                 &mut app.workspace.views[1],
@@ -48,6 +51,7 @@ pub fn render(
             );
             left_nav = nav;
             left_rect = rect;
+            left_ctx_menu = ctx_menu;
             let left_post = PanZoomSnapshot::from_state(&app.workspace.views[1]);
 
             if sync_enabled && left_pre.differs_from(&left_post) {
@@ -57,7 +61,7 @@ pub fn render(
 
             // Right (original side) = index 0
             let right_pre = PanZoomSnapshot::from_state(&app.workspace.views[0]);
-            let (nav, rect) = crate::ui::canvas::render(
+            let (nav, rect, ctx_menu) = crate::ui::canvas::render(
                 ctx,
                 &mut columns[1],
                 &mut app.workspace.views[0],
@@ -71,6 +75,7 @@ pub fn render(
             );
             right_nav = nav;
             right_rect = rect;
+            right_ctx_menu = ctx_menu;
             let right_post = PanZoomSnapshot::from_state(&app.workspace.views[0]);
 
             if sync_enabled && right_pre.differs_from(&right_post) {
@@ -81,33 +86,34 @@ pub fn render(
 
         // Determine active canvas rect: index 0 -> right, index 1 -> left
         let active_canvas_rect = if active_index == 1 { left_rect } else { right_rect };
+        let context_menu_requested = left_ctx_menu || right_ctx_menu;
 
         // Handle focus switch: Some(0) means the pane was clicked just to gain focus.
         // Update the active index and invalidate the title cache, but don't navigate.
         if left_nav == Some(0) {
             app.workspace.active_view_index = 1;
             app.cached_title.clear();
-            return SplitLayoutResult { nav_action: None, active_canvas_rect: left_rect };
+            return SplitLayoutResult { nav_action: None, active_canvas_rect: left_rect, context_menu_requested };
         } else if right_nav == Some(0) {
             app.workspace.active_view_index = 0;
             app.cached_title.clear();
-            return SplitLayoutResult { nav_action: None, active_canvas_rect: right_rect };
+            return SplitLayoutResult { nav_action: None, active_canvas_rect: right_rect, context_menu_requested };
         }
 
         // Real navigation: set focus and propagate direction.
         if left_nav.is_some() {
             app.workspace.active_view_index = 1;
             app.cached_title.clear();
-            return SplitLayoutResult { nav_action: left_nav, active_canvas_rect: left_rect };
+            return SplitLayoutResult { nav_action: left_nav, active_canvas_rect: left_rect, context_menu_requested };
         } else if right_nav.is_some() {
             app.workspace.active_view_index = 0;
             app.cached_title.clear();
-            return SplitLayoutResult { nav_action: right_nav, active_canvas_rect: right_rect };
+            return SplitLayoutResult { nav_action: right_nav, active_canvas_rect: right_rect, context_menu_requested };
         }
 
-        SplitLayoutResult { nav_action: None, active_canvas_rect }
+        SplitLayoutResult { nav_action: None, active_canvas_rect, context_menu_requested }
     } else {
-        let (nav_action, canvas_rect) = crate::ui::canvas::render(
+        let (nav_action, canvas_rect, context_menu_requested) = crate::ui::canvas::render(
             ctx,
             pass_through_ui,
             &mut app.workspace.views[0],
@@ -119,6 +125,6 @@ pub fn render(
             false,
             allow_interaction,
         );
-        SplitLayoutResult { nav_action, active_canvas_rect: canvas_rect }
+        SplitLayoutResult { nav_action, active_canvas_rect: canvas_rect, context_menu_requested }
     }
 }

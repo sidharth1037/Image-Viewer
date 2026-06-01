@@ -179,6 +179,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
             || app.bottom_bar_index_editing
             || app.show_delete_file_dialog
             || app.show_settings_window
+            || app.context_menu.open
         {
             show_bars = true;
         }

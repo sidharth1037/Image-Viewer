@@ -78,6 +78,7 @@ pub struct ImageApp {
     pub immersive_bottombar_visible: bool,
     pub group_drag_payload: Option<crate::groups::GroupDragPayload>,
     pub notifications: crate::notifications::NotificationToast,
+    pub context_menu: crate::ui::context_menu::ContextMenuState,
     startup_open_target: Option<std::path::PathBuf>,
 }
 
@@ -170,6 +171,7 @@ impl ImageApp {
             immersive_bottombar_visible: false,
             group_drag_payload: None,
             notifications: crate::notifications::NotificationToast::new(),
+            context_menu: crate::ui::context_menu::ContextMenuState::default(),
             startup_open_target: initial_file.map(std::path::PathBuf::from),
         };
 
@@ -283,6 +285,9 @@ impl eframe::App for ImageApp {
                             ui::duplicate_view::DuplicateViewAction::SwitchTab(scan_type) => {
                                 handlers::switch_duplicate_tab(self, scan_type);
                             }
+                            ui::duplicate_view::DuplicateViewAction::ContextMenu { pos } => {
+                                handlers::open_context_menu(self, pos);
+                            }
                             ui::duplicate_view::DuplicateViewAction::None => {}
                         }
                         crate::ui::playlist_grid::PlaylistGridAction::None
@@ -315,6 +320,9 @@ impl eframe::App for ImageApp {
                 }
                 crate::ui::playlist_grid::PlaylistGridAction::OpenFolder => {
                     self.workspace.views[self.workspace.active_view_index].browse_folder_requested = true;
+                }
+                crate::ui::playlist_grid::PlaylistGridAction::ContextMenu { pos } => {
+                    handlers::open_context_menu(self, pos);
                 }
                 crate::ui::playlist_grid::PlaylistGridAction::None => {}
             }
@@ -353,6 +361,13 @@ impl eframe::App for ImageApp {
 
             let result = panel_output.inner;
             let nav_action = result.nav_action;
+
+            // Canvas right-click → open context menu at cursor position.
+            if result.context_menu_requested {
+                if let Some(pos) = ctx.pointer_interact_pos() {
+                    handlers::open_context_menu(self, pos);
+                }
+            }
 
             ui::floating_toolbar::render(self, ctx, result.active_canvas_rect);
 
@@ -445,6 +460,11 @@ impl eframe::App for ImageApp {
             }
             }
         } // end else (canvas mode)
+
+        // Context menu overlay — rendered after all views, before window border.
+        if let Some(action) = ui::context_menu::render(&mut self.context_menu, ctx) {
+            handlers::dispatch_context_menu_action(self, ctx, &action);
+        }
             
         // 3. Custom Window Border (Only when windowed)
         if !self.workspace.active_view().is_fullscreen {
