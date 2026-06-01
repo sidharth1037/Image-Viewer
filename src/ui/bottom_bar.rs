@@ -423,6 +423,7 @@ pub fn render(app: &mut ImageApp, ctx: &egui::Context) {
                 || app.show_filter_popup
                 || app.show_delete_file_dialog
                 || app.show_settings_window
+                || app.context_menu.open
                 || is_bottom_visible_in_immersive(app, ctx);
         app.immersive_bottombar_visible = show_bars;
         if show_bars {
