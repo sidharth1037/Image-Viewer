@@ -149,6 +149,7 @@ pub struct ShortcutConfig {
     pub add_to_group: Shortcut,
     pub move_to_default: Shortcut,
     pub select_all: Shortcut,
+    pub copy_files: Shortcut,
 }
 
 impl Default for ShortcutConfig {
@@ -190,6 +191,7 @@ impl Default for ShortcutConfig {
             add_to_group: Shortcut::new(egui::Key::M, false, false, false, false),
             move_to_default: Shortcut::new(egui::Key::M, false, true, false, false),
             select_all: Shortcut::new(egui::Key::A, false, true, false, false),
+            copy_files: Shortcut::new(egui::Key::C, false, true, false, false),
         }
     }
 }

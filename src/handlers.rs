@@ -503,6 +503,22 @@ fn delete_file_shortcut_pressed(
     false
 }
 
+fn copy_shortcut_pressed(
+    input: &egui::InputState,
+    shortcut: crate::shortcuts::Shortcut,
+) -> bool {
+    if shortcut.is_pressed(input) {
+        return true;
+    }
+
+    // Standard copy key event (Ctrl+C or Cmd+C) may be consumed by egui and emitted as Event::Copy
+    if input.events.iter().any(|event| matches!(event, egui::Event::Copy)) {
+        return true;
+    }
+
+    false
+}
+
 fn is_group_restricted(app: &ImageApp) -> bool {
     app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid
         && app.workspace.group_tabs.selected_id != crate::groups::DEFAULT_GROUP_ID
@@ -1471,6 +1487,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             return;
         }
 
+        if ctx.input(|i| copy_shortcut_pressed(i, shortcuts.copy_files)) {
+            dispatch_context_menu_action(app, ctx, &crate::ui::context_menu::ContextMenuAction { id: "copy_files" });
+            return;
+        }
+
         if close_window {
             set_overlay_message(app, time, "Shortcut: Close window");
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1545,6 +1566,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             return;
         }
 
+        if ctx.input(|i| copy_shortcut_pressed(i, shortcuts.copy_files)) {
+            dispatch_context_menu_action(app, ctx, &crate::ui::context_menu::ContextMenuAction { id: "copy_files" });
+            return;
+        }
+
         if close_window {
             set_overlay_message(app, time, "Shortcut: Close window");
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1571,6 +1597,10 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             "Split view disabled"
         };
         set_overlay_message(app, time, msg);
+    }
+
+    if ctx.input(|i| copy_shortcut_pressed(i, shortcuts.copy_files)) {
+        dispatch_context_menu_action(app, ctx, &crate::ui::context_menu::ContextMenuAction { id: "copy_files" });
     }
 
     if clear_view {
