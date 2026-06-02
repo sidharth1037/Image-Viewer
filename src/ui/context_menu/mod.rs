@@ -19,7 +19,7 @@ const SHORTCUT_RIGHT_PAD: f32 = 10.0;
 /// A single clickable row in the context menu.
 pub struct ContextMenuItem {
     pub icon: &'static str,
-    pub label: &'static str,
+    pub label: String,
     pub shortcut_hint: Option<&'static str>,
     pub enabled: bool,
     pub id: &'static str,
@@ -240,7 +240,7 @@ fn render_item(ui: &mut egui::Ui, item: &ContextMenuItem) -> Option<ContextMenuA
         ui.painter().text(
             egui::pos2(label_x, rect.center().y),
             egui::Align2::LEFT_CENTER,
-            item.label,
+            &item.label,
             egui::TextStyle::Button.resolve(ui.style()),
             fg_color,
         );

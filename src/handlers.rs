@@ -2869,6 +2869,60 @@ pub fn dispatch_context_menu_action(
             }
         }
 
+        "copy_files" => {
+            let is_playlist = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
+            let is_duplicate = app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder;
+
+            let paths: Vec<std::path::PathBuf> = if is_playlist {
+                app.workspace.playlist_grid.as_ref()
+                    .map(|grid| {
+                        grid.selection.selected.iter()
+                            .filter_map(|&idx| app.workspace.active_view().active_playlist.get(idx).cloned())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else if is_duplicate {
+                app.workspace.duplicate_finder.as_ref()
+                    .map(|dup_state| {
+                        dup_state.active_scan().groups.iter()
+                            .flat_map(|group| {
+                                group.selection.selected.iter()
+                                    .filter_map(|&idx| group.paths.get(idx).cloned())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                // Canvas: copy the current file.
+                app.workspace.active_view().current_file_path.as_ref()
+                    .map(|p| vec![p.clone()])
+                    .unwrap_or_default()
+            };
+
+            if !paths.is_empty() {
+                #[cfg(windows)]
+                {
+                    match crate::platform::windows_clipboard::copy_files_to_clipboard(&paths) {
+                        Ok(()) => {
+                            let msg = if paths.len() == 1 {
+                                "Copied image to clipboard".to_string()
+                            } else {
+                                format!("Copied {} items to clipboard", paths.len())
+                            };
+                            set_overlay_message(app, time, &msg);
+                        }
+                        Err(e) => {
+                            set_overlay_message(app, time, &format!("Copy failed: {}", e));
+                        }
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    set_overlay_message(app, time, "File copy is only available on Windows");
+                }
+            }
+        }
+
         _ => {}
     }
 }

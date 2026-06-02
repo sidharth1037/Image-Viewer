@@ -119,10 +119,6 @@ impl PlaylistSelection {
     pub fn is_selected(&self, index: usize) -> bool {
         self.selected.contains(&index)
     }
-
-    pub fn has_selection(&self) -> bool {
-        !self.selected.is_empty()
-    }
 }
 
 // ── Main grid state ──────────────────────────────────────────────────────
