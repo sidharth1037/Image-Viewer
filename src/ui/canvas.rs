@@ -121,6 +121,7 @@ pub fn render(
     is_split: bool,
     immersive_topbar_visible: bool,
     allow_interaction: bool,
+    is_transitioning: bool,
 ) -> (Option<i32>, egui::Rect, bool) {
     let mut nav_action = None;
     let mut context_menu_requested = false;
@@ -313,201 +314,203 @@ pub fn render(
         state.reset_start_time = Some(ui.input(|i| i.time));
     }
 
-    if !state.frames.is_empty() {
-        let current_time = ctx.input(|i| i.time);
+    if !is_transitioning {
+        if !state.frames.is_empty() {
+            let current_time = ctx.input(|i| i.time);
 
-        // Manual Zoom/Pan logic.
-        if allow_interaction && state.reset_start_time.is_none() {
-            if response.hovered() {
-                let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
-                if scroll != 0.0 {
-                    if let Some(pos) = pointer_pos {
-                        state.auto_fit = false;
-                        let zoom_multiplier = (scroll * 0.005).exp();
-                        let old_scale = state.scale;
-                        let new_scale = (old_scale * zoom_multiplier)
-                            .max(min_zoom_scale)
-                            .min(max_zoom_scale);
+            // Manual Zoom/Pan logic.
+            if allow_interaction && state.reset_start_time.is_none() {
+                if response.hovered() {
+                    let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
+                    if scroll != 0.0 {
+                        if let Some(pos) = pointer_pos {
+                            state.auto_fit = false;
+                            let zoom_multiplier = (scroll * 0.005).exp();
+                            let old_scale = state.scale;
+                            let new_scale = (old_scale * zoom_multiplier)
+                                .max(min_zoom_scale)
+                                .min(max_zoom_scale);
 
-                        let canvas_center = response.rect.center();
-                        let pointer_offset = pos - canvas_center;
-                        let scale_ratio = new_scale / old_scale;
+                            let canvas_center = response.rect.center();
+                            let pointer_offset = pos - canvas_center;
+                            let scale_ratio = new_scale / old_scale;
 
-                        let mut new_pan = state.pan - (pointer_offset - state.pan) * (scale_ratio - 1.0);
+                            let mut new_pan = state.pan - (pointer_offset - state.pan) * (scale_ratio - 1.0);
 
-                        let scaled_size = image_size * new_scale;
-                        let max_pan_x = ((scaled_size.x - canvas_size.x) / 2.0).max(0.0);
-                        let max_pan_y = ((scaled_size.y - canvas_size.y) / 2.0).max(0.0);
-                        new_pan.x = new_pan.x.clamp(-max_pan_x, max_pan_x);
-                        new_pan.y = new_pan.y.clamp(-max_pan_y, max_pan_y);
+                            let scaled_size = image_size * new_scale;
+                            let max_pan_x = ((scaled_size.x - canvas_size.x) / 2.0).max(0.0);
+                            let max_pan_y = ((scaled_size.y - canvas_size.y) / 2.0).max(0.0);
+                            new_pan.x = new_pan.x.clamp(-max_pan_x, max_pan_x);
+                            new_pan.y = new_pan.y.clamp(-max_pan_y, max_pan_y);
 
-                        state.pan = new_pan;
-                        state.scale = new_scale;
+                            state.pan = new_pan;
+                            state.scale = new_scale;
+                        }
                     }
                 }
-            }
 
-            if is_zoomed_in {
-                if response.dragged_by(egui::PointerButton::Primary) {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                    state.auto_fit = false;
-                    state.pan += response.drag_delta();
+                if is_zoomed_in {
+                    if response.dragged_by(egui::PointerButton::Primary) {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        state.auto_fit = false;
+                        state.pan += response.drag_delta();
+                    }
+
+                    let scaled_size = image_size * state.scale;
+                    let max_pan_x = ((scaled_size.x - canvas_size.x) / 2.0).max(0.0);
+                    let max_pan_y = ((scaled_size.y - canvas_size.y) / 2.0).max(0.0);
+                    state.pan.x = state.pan.x.clamp(-max_pan_x, max_pan_x);
+                    state.pan.y = state.pan.y.clamp(-max_pan_y, max_pan_y);
                 }
-
-                let scaled_size = image_size * state.scale;
-                let max_pan_x = ((scaled_size.x - canvas_size.x) / 2.0).max(0.0);
-                let max_pan_y = ((scaled_size.y - canvas_size.y) / 2.0).max(0.0);
-                state.pan.x = state.pan.x.clamp(-max_pan_x, max_pan_x);
-                state.pan.y = state.pan.y.clamp(-max_pan_y, max_pan_y);
             }
-        }
 
-        // --- ANIMATION PLAYER LOGIC ---
-        if state.frames.len() > 1 {
-            if let Some(last_time) = state.last_frame_time {
-                let duration = state.frame_durations[state.current_frame];
-                if current_time - last_time >= duration {
-                    state.current_frame = (state.current_frame + 1) % state.frames.len();
+            // --- ANIMATION PLAYER LOGIC ---
+            if state.frames.len() > 1 {
+                if let Some(last_time) = state.last_frame_time {
+                    let duration = state.frame_durations[state.current_frame];
+                    if current_time - last_time >= duration {
+                        state.current_frame = (state.current_frame + 1) % state.frames.len();
+                        state.last_frame_time = Some(current_time);
+                    }
+                    let next_frame_in = (duration - (current_time - last_time)).max(0.0);
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(next_frame_in));
+                } else {
                     state.last_frame_time = Some(current_time);
+                    ctx.request_repaint();
                 }
-                let next_frame_in = (duration - (current_time - last_time)).max(0.0);
-                ctx.request_repaint_after(std::time::Duration::from_secs_f64(next_frame_in));
-            } else {
-                state.last_frame_time = Some(current_time);
+            }
+
+            // Smooth interpolation for zoom/pan transitions.
+            if let Some(start_time) = state.reset_start_time {
+                let elapsed = (current_time - start_time) as f32;
+                let t = (elapsed / 0.35).clamp(0.0, 1.0);
+
+                if let (Some(t_scale), Some(t_pan)) = (state.target_scale, state.target_pan) {
+                    let lerp_factor = 0.25;
+                    state.scale += (t_scale - state.scale) * lerp_factor;
+                    state.pan += (t_pan - state.pan) * lerp_factor;
+
+                    if t >= 1.0 || ((t_scale - state.scale).abs() < 0.001 && (t_pan - state.pan).length() < 0.1)
+                    {
+                        state.scale = t_scale;
+                        state.pan = t_pan;
+                        state.reset_start_time = None;
+                        state.target_scale = None;
+                        state.target_pan = None;
+
+                        if (t_scale - default_display_scale).abs() < 0.001 {
+                            state.auto_fit = true;
+                        }
+                    }
+                }
                 ctx.request_repaint();
             }
-        }
 
-        // Smooth interpolation for zoom/pan transitions.
-        if let Some(start_time) = state.reset_start_time {
-            let elapsed = (current_time - start_time) as f32;
-            let t = (elapsed / 0.35).clamp(0.0, 1.0);
-
-            if let (Some(t_scale), Some(t_pan)) = (state.target_scale, state.target_pan) {
-                let lerp_factor = 0.25;
-                state.scale += (t_scale - state.scale) * lerp_factor;
-                state.pan += (t_pan - state.pan) * lerp_factor;
-
-                if t >= 1.0 || ((t_scale - state.scale).abs() < 0.001 && (t_pan - state.pan).length() < 0.1)
-                {
-                    state.scale = t_scale;
-                    state.pan = t_pan;
-                    state.reset_start_time = None;
-                    state.target_scale = None;
-                    state.target_pan = None;
-
-                    if (t_scale - default_display_scale).abs() < 0.001 {
-                        state.auto_fit = true;
-                    }
-                }
+            // Draw the image.
+            let texture = &state.frames[state.current_frame];
+            
+            let mut anim_scale = 1.0;
+            let mut anim_y_offset = 0.0;
+            let mut anim_alpha = 255;
+            if let Some(start_time) = state.move_anim_start {
+                let elapsed = current_time - start_time;
+                let (scale, y_offset, alpha) = crate::handlers::move_anim_values(elapsed);
+                anim_scale = scale;
+                anim_y_offset = y_offset;
+                anim_alpha = alpha;
             }
-            ctx.request_repaint();
-        }
 
-        // Draw the image.
-        let texture = &state.frames[state.current_frame];
-        
-        let mut anim_scale = 1.0;
-        let mut anim_y_offset = 0.0;
-        let mut anim_alpha = 255;
-        if let Some(start_time) = state.move_anim_start {
-            let elapsed = current_time - start_time;
-            let (scale, y_offset, alpha) = crate::handlers::move_anim_values(elapsed);
-            anim_scale = scale;
-            anim_y_offset = y_offset;
-            anim_alpha = alpha;
-        }
+            let scaled_size = image_size * state.scale * anim_scale;
+            let center_offset = (canvas_size - scaled_size) / 2.0;
+            let mut image_top_left = response.rect.min + center_offset + state.pan;
+            image_top_left.y += anim_y_offset;
+            
+            let draw_rect = egui::Rect::from_min_size(image_top_left, scaled_size);
+            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
 
-        let scaled_size = image_size * state.scale * anim_scale;
-        let center_offset = (canvas_size - scaled_size) / 2.0;
-        let mut image_top_left = response.rect.min + center_offset + state.pan;
-        image_top_left.y += anim_y_offset;
-        
-        let draw_rect = egui::Rect::from_min_size(image_top_left, scaled_size);
-        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-
-        let tint = egui::Color32::from_white_alpha(anim_alpha);
-        painter.image(texture.id(), draw_rect, uv, tint);
-    } else {
-        // Draw loading or empty indicators.
-        let mut child_ui = ui.new_child(
-            egui::UiBuilder::new()
-                .max_rect(response.rect)
-                .layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)),
-        );
-
-        if let Some(err) = &state.load_error {
-            child_ui.add(
-                egui::Label::new(egui::RichText::new(err).color(child_ui.visuals().error_fg_color))
-                    .selectable(false),
-            );
-        } else if state.current_file_name.is_empty() {
-            let area_rect = child_ui.max_rect();
-            let mut group_ui = child_ui.new_child(
+            let tint = egui::Color32::from_white_alpha(anim_alpha);
+            painter.image(texture.id(), draw_rect, uv, tint);
+        } else {
+            // Draw loading or empty indicators.
+            let mut child_ui = ui.new_child(
                 egui::UiBuilder::new()
-                    .max_rect(area_rect)
-                    .layout(egui::Layout::top_down(egui::Align::Center)),
+                    .max_rect(response.rect)
+                    .layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)),
             );
 
-            let filter_text = state.filter.criteria.text.trim();
-            if state.scanning_in_progress {
-                let content_height = 64.0;
-                let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
-                group_ui.add_space(top_padding);
-                group_ui.add(egui::Spinner::new().size(20.0));
-                group_ui.add_space(8.0);
-                group_ui.add(egui::Label::new("Scanning folder...").selectable(false));
-            } else if !filter_text.is_empty() && !state.source_playlist.is_empty() {
-                let content_height = 60.0;
-                let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
-                group_ui.add_space(top_padding);
-                let message = format!(
-                    "No files found with the current filter.\nContains: {}",
-                    filter_text
-                );
-                group_ui.add(egui::Label::new(message).selectable(false));
-            } else {
-                // Vertically centre: push down by half the area minus half the content height estimate.
-                let content_height = 100.0; // rough: text + spacing + two buttons
-                let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
-                group_ui.add_space(top_padding);
-
-                group_ui.add(
-                    egui::Label::new("No image loaded.\nDrag and drop an image or folder here.")
+            if let Some(err) = &state.load_error {
+                child_ui.add(
+                    egui::Label::new(egui::RichText::new(err).color(child_ui.visuals().error_fg_color))
                         .selectable(false),
                 );
-                group_ui.add_space(8.0);
+            } else if state.current_file_name.is_empty() {
+                let area_rect = child_ui.max_rect();
+                let mut group_ui = child_ui.new_child(
+                    egui::UiBuilder::new()
+                        .max_rect(area_rect)
+                        .layout(egui::Layout::top_down(egui::Align::Center)),
+                );
 
-                let open_file_btn = egui::Button::new(
-                    egui::RichText::new(format!(
-                        "{}  Open File",
-                        egui_phosphor::regular::FILE_IMAGE
-                    ))
-                    .size(14.0),
-                )
-                .min_size(egui::vec2(120.0, 30.0));
+                let filter_text = state.filter.criteria.text.trim();
+                if state.scanning_in_progress {
+                    let content_height = 64.0;
+                    let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+                    group_ui.add_space(top_padding);
+                    group_ui.add(egui::Spinner::new().size(20.0));
+                    group_ui.add_space(8.0);
+                    group_ui.add(egui::Label::new("Scanning folder...").selectable(false));
+                } else if !filter_text.is_empty() && !state.source_playlist.is_empty() {
+                    let content_height = 60.0;
+                    let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+                    group_ui.add_space(top_padding);
+                    let message = format!(
+                        "No files found with the current filter.\nContains: {}",
+                        filter_text
+                    );
+                    group_ui.add(egui::Label::new(message).selectable(false));
+                } else {
+                    // Vertically centre: push down by half the area minus half the content height estimate.
+                    let content_height = 100.0; // rough: text + spacing + two buttons
+                    let top_padding = ((area_rect.height() - content_height) / 2.0).max(0.0);
+                    group_ui.add_space(top_padding);
 
-                if group_ui.add(open_file_btn).clicked() {
-                    state.browse_file_requested = true;
+                    group_ui.add(
+                        egui::Label::new("No image loaded.\nDrag and drop an image or folder here.")
+                            .selectable(false),
+                    );
+                    group_ui.add_space(8.0);
+
+                    let open_file_btn = egui::Button::new(
+                        egui::RichText::new(format!(
+                            "{}  Open File",
+                            egui_phosphor::regular::FILE_IMAGE
+                        ))
+                        .size(14.0),
+                    )
+                    .min_size(egui::vec2(120.0, 30.0));
+
+                    if group_ui.add(open_file_btn).clicked() {
+                        state.browse_file_requested = true;
+                    }
+
+                    group_ui.add_space(4.0);
+
+                    let open_folder_btn = egui::Button::new(
+                        egui::RichText::new(format!(
+                            "{}  Open Folder",
+                            egui_phosphor::regular::FOLDER_OPEN
+                        ))
+                        .size(14.0),
+                    )
+                    .min_size(egui::vec2(120.0, 30.0));
+
+                    if group_ui.add(open_folder_btn).clicked() {
+                        state.browse_folder_requested = true;
+                    }
                 }
-
-                group_ui.add_space(4.0);
-
-                let open_folder_btn = egui::Button::new(
-                    egui::RichText::new(format!(
-                        "{}  Open Folder",
-                        egui_phosphor::regular::FOLDER_OPEN
-                    ))
-                    .size(14.0),
-                )
-                .min_size(egui::vec2(120.0, 30.0));
-
-                if group_ui.add(open_folder_btn).clicked() {
-                    state.browse_folder_requested = true;
-                }
+            } else {
+                child_ui.spinner();
             }
-        } else {
-            child_ui.spinner();
         }
     }
 

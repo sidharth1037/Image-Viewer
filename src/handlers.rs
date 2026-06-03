@@ -612,12 +612,18 @@ fn apply_group_playlist_state(app: &mut ImageApp, state: &crate::groups::GroupPl
     );
 
     if let Some(grid) = app.workspace.playlist_grid.as_mut() {
-        grid.selection.clear();
+        // Restore per-group selection.
+        grid.selection.selected = state.selected_indices.clone();
+        grid.selection.anchor = state.selected_indices.iter().next().copied();
+        grid.selection.last_clicked = state.selected_indices.iter().next_back().copied();
         grid.refresh_total_size_cache(&playlist_snapshot);
         if playlist_snapshot.is_empty() {
+            grid.restore_scroll_offset = None;
             grid.scroll_to_index = None;
         } else {
-            grid.scroll_to_index = Some(current_index);
+            // Restore the exact pixel scroll offset saved for this group.
+            grid.restore_scroll_offset = Some(state.scroll_offset_y);
+            grid.scroll_to_index = None;
         }
     }
 }
@@ -628,7 +634,12 @@ pub fn switch_group(app: &mut ImageApp, group_id: u32) {
         return;
     }
 
-    let current_state = crate::groups::GroupPlaylistState::from_view(app.workspace.active_view());
+    let mut current_state = crate::groups::GroupPlaylistState::from_view(app.workspace.active_view());
+    // Save the grid scroll offset and selection for the current group.
+    if let Some(grid) = app.workspace.playlist_grid.as_ref() {
+        current_state.scroll_offset_y = grid.last_scroll_offset_y;
+        current_state.selected_indices = grid.selection.selected.clone();
+    }
     app.workspace
         .group_tabs
         .set_group_playlist(current_group_id, current_state);
@@ -933,8 +944,19 @@ fn transfer_items_between_groups(
                 .count();
 
             if duplicate_count > 0 {
-                let label = if duplicate_count == 1 { "Item" } else { "Items" };
-                let message = format!("{} already exist in Group {}", label, group_id);
+                let label = if duplicate_count < paths.len() {
+                    "Some items"
+                } else if duplicate_count == 1 {
+                    "Item"
+                } else {
+                    "Items"
+                };
+                let group_name = app
+                    .workspace
+                    .group_tabs
+                    .group_name(group_id)
+                    .unwrap_or_else(|| format!("Group {}", group_id));
+                let message = format!("{} already in {}", label, group_name);
                 app.notifications.show(time, message);
                 return false;
             }
@@ -946,9 +968,18 @@ fn transfer_items_between_groups(
         let mut target_state = load_group_state(app, &updated, active_group_id, target_group_id);
 
         let added = target_state.add_items(paths);
-        if added > 0 {
-            target_state.rebuild_active_playlist();
+        if added == 0 {
+            // All items already exist in the target group.
+            let label = if paths.len() == 1 { "Item already exists" } else { "Items already exist" };
+            let target_name = app
+                .workspace
+                .group_tabs
+                .group_name(target_group_id)
+                .unwrap_or_else(|| format!("Group {}", target_group_id));
+            app.notifications.show(time, format!("{} in {}", label, target_name));
+            return false;
         }
+        target_state.rebuild_active_playlist();
 
         updated.insert(target_group_id, target_state);
     }
@@ -992,7 +1023,14 @@ pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
         return;
     };
 
-    transfer_items_between_groups(
+    let target_name = app
+        .workspace
+        .group_tabs
+        .group_name(target_group_id)
+        .unwrap_or_else(|| "group".to_string());
+
+    let count = payload.paths.len();
+    let success = transfer_items_between_groups(
         app,
         payload.source_group_id,
         target_group_id,
@@ -1000,6 +1038,10 @@ pub fn handle_group_drop(app: &mut ImageApp, target_group_id: u32, time: f64) {
         time,
     );
 
+    if success {
+        let label = if count == 1 { "item" } else { "items" };
+        app.notifications.show(time, format!("Moved {} {} to {}", count, label, target_name));
+    }
 }
 
 /// Queues both image loading and directory scanning through the same runtime paths.
@@ -1619,7 +1661,7 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             } else if app.workspace.playlist_grid.is_some()
                 && app.workspace.active_view().current_folder.is_some()
             {
-                return_to_playlist_view(app);
+                return_to_playlist_view(app, ctx);
                 return;
             }
         }
@@ -2405,8 +2447,57 @@ pub fn playlist_grid_open_image(app: &mut ImageApp, path: std::path::PathBuf, in
 
 /// Return from canvas mode to the playlist grid view.
 /// The previously viewed image stays selected and the grid scrolls to it.
-pub fn return_to_playlist_view(app: &mut ImageApp) {
+pub fn return_to_playlist_view(app: &mut ImageApp, ctx: &egui::Context) {
     let current_index = app.workspace.active_view().current_index;
+
+    // Check if we should play return animation
+    let play_animation = if app.workspace.active_view().scanning_in_progress {
+        false
+    } else if app.workspace.active_view().active_playlist.is_empty() {
+        false
+    } else if current_index >= app.workspace.active_view().active_playlist.len() {
+        false
+    } else if app.workspace.playlist_grid.is_none() {
+        false
+    } else {
+        let path = &app.workspace.active_view().active_playlist[current_index];
+        if let Some(grid) = &app.workspace.playlist_grid {
+            matches!(grid.thumbnail_cache.get(path), Some(crate::playlist_grid::ThumbnailEntry::Ready { .. }))
+        } else {
+            false
+        }
+    };
+
+    if play_animation {
+        let path = app.workspace.active_view().active_playlist[current_index].clone();
+        let view = app.workspace.active_view();
+
+        // Determine actual canvas image rect from last frame's central panel rect and view scale/pan
+        let canvas_rect = app.last_central_panel_rect;
+        let (w, h) = if let Some(crate::playlist_grid::ThumbnailEntry::Ready { width, height, .. }) = app.workspace.playlist_grid.as_ref().and_then(|g| g.thumbnail_cache.get(&path)) {
+            (*width, *height)
+        } else {
+            (100, 100)
+        };
+        let (w, h) = view.image_resolution.unwrap_or((w, h));
+        let image_size = egui::vec2(w as f32, h as f32) / ctx.pixels_per_point().max(0.0001);
+        let scaled_size = image_size * view.scale;
+        let center_offset = (canvas_rect.size() - scaled_size) / 2.0;
+        let image_top_left = canvas_rect.min + center_offset + view.pan;
+        let canvas_image_rect = egui::Rect::from_min_size(image_top_left, scaled_size);
+
+        app.transition_animation = Some(crate::app::TransitionAnimation {
+            is_opening: false,
+            start_time: -1.0, // Wait for first layout frame to capture the thumb_rect
+            duration: 0.15,
+            progress: 0.0,
+            thumb_rect: None,
+            canvas_image_rect: Some(canvas_image_rect),
+            image_path: path,
+            frames_waiting: 0,
+        });
+    }
+
     let _ = app.workspace.active_view_mut().load_id.fetch_add(1, Ordering::AcqRel);
     let view = app.workspace.active_view_mut();
     view.frames.clear();

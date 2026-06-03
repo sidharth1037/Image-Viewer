@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 
 pub const DEFAULT_GROUP_ID: u32 = 0;
@@ -36,6 +36,10 @@ pub struct GroupPlaylistState {
     pub active_playlist: Vec<PathBuf>,
     pub current_index: usize,
     pub filter: crate::state::FilterState,
+    /// Remembered scroll offset for this group's grid view.
+    pub scroll_offset_y: f32,
+    /// Remembered selected item indices for this group.
+    pub selected_indices: BTreeSet<usize>,
 }
 
 impl GroupPlaylistState {
@@ -45,6 +49,8 @@ impl GroupPlaylistState {
             active_playlist: Vec::new(),
             current_index: 0,
             filter: crate::state::FilterState::default(),
+            scroll_offset_y: 0.0,
+            selected_indices: BTreeSet::new(),
         }
     }
 
@@ -54,6 +60,8 @@ impl GroupPlaylistState {
             active_playlist: view.active_playlist.clone(),
             current_index: view.current_index,
             filter: view.filter.clone(),
+            scroll_offset_y: 0.0,
+            selected_indices: BTreeSet::new(),
         }
     }
 

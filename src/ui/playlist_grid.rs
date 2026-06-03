@@ -7,7 +7,7 @@ use crate::groups::GroupDragPayload;
 pub enum PlaylistGridAction {
     None,
     /// User double-clicked an image — open it in canvas mode.
-    OpenImage { path: std::path::PathBuf, index: usize },
+    OpenImage { path: std::path::PathBuf, index: usize, rect: egui::Rect },
     /// User clicked "Open File" in the empty-folder placeholder.
     OpenFile,
     /// User clicked "Open Folder" in the empty-folder placeholder.
@@ -109,8 +109,15 @@ pub fn render(
 
     let mut action = PlaylistGridAction::None;
 
-    // Handle scroll-to-index request.
-    let scroll_to_idx = grid.scroll_to_index.take();
+    // Handle scroll restoration requests.
+    // Pixel-exact restore (from group switch) takes priority over index-based scroll.
+    let restore_offset = grid.restore_scroll_offset.take();
+    let scroll_to_idx = if restore_offset.is_some() {
+        grid.scroll_to_index.take(); // consume and discard
+        None
+    } else {
+        grid.scroll_to_index.take()
+    };
 
     let scroll_id = egui::Id::new("playlist_grid_scroll");
 
@@ -118,18 +125,35 @@ pub fn render(
         .id_salt(scroll_id)
         .auto_shrink([false, false]);
 
-    // If we need to scroll to a specific index, calculate the approximate Y
-    // and set the scroll offset.  This is an approximation — we use the
-    // average row height since we can't know exact row heights before layout.
-    if let Some(target_idx) = scroll_to_idx {
+    if let Some(offset_y) = restore_offset {
+        // Restore exact pixel offset saved when switching away from this group.
+        scroll_area = scroll_area.vertical_scroll_offset(offset_y);
+    } else if let Some(target_idx) = scroll_to_idx {
         let target_row = target_idx / columns;
         // Estimate each row's height as max_thumb_h + label_h + spacing_y.
         let est_row_h = max_thumb_h + label_h + spacing_y;
-        let target_y = padding_y + target_row as f32 * est_row_h;
-        // Centre the target in the viewport.
-        let viewport_h = ui.available_height();
-        let scroll_y = (target_y - viewport_h / 2.0 + est_row_h / 2.0).max(0.0);
-        scroll_area = scroll_area.vertical_scroll_offset(scroll_y);
+        let target_top = padding_y + target_row as f32 * est_row_h;
+        // The visible content is max_thumb_h + label_h (exclude spacing_y at the bottom of the row)
+        let target_bottom = target_top + max_thumb_h + label_h;
+
+        let viewport_h = if grid.last_viewport_height > 0.0 {
+            grid.last_viewport_height
+        } else {
+            ui.available_height()
+        };
+        let viewport_top = grid.last_scroll_offset_y;
+        let viewport_bottom = viewport_top + viewport_h;
+
+        let is_fully_visible = target_top >= viewport_top && target_bottom <= viewport_bottom;
+
+        if is_fully_visible {
+            // Keep the last scroll offset, do not trigger auto-scroll
+            scroll_area = scroll_area.vertical_scroll_offset(viewport_top);
+        } else {
+            // Centre the target in the viewport.
+            let scroll_y = (target_top - viewport_h / 2.0 + est_row_h / 2.0).max(0.0);
+            scroll_area = scroll_area.vertical_scroll_offset(scroll_y);
+        }
     }
 
     let visible_paths = scroll_area.show(ui, |ui| {
@@ -217,6 +241,12 @@ pub fn render(
                     egui::pos2(x + thumb_x_offset, row_content_rect.min.y + thumb_y_offset),
                     egui::vec2(item_thumb_w, item_thumb_h),
                 );
+                if let Some(anim) = &mut app.transition_animation {
+                    if !anim.is_opening && anim.thumb_rect.is_none() && item_idx == active_view.current_index {
+                        anim.thumb_rect = Some(thumb_rect);
+                        anim.start_time = ui.input(|i| i.time);
+                    }
+                }
                 let label_rect = egui::Rect::from_min_size(
                     egui::pos2(x, row_content_rect.min.y + row_thumb_h),
                     egui::vec2(thumb_w, label_h),
@@ -369,6 +399,7 @@ pub fn render(
                     action = PlaylistGridAction::OpenImage {
                         path: path.clone(),
                         index: item_idx,
+                        rect: thumb_rect,
                     };
                 } else if response.clicked() {
                     let modifiers = ui.input(|i| i.modifiers);
@@ -422,14 +453,16 @@ pub fn render(
         ui.add_space(padding_y);
 
         visible_paths
-    }).inner;
+    });
+
+    // Remember the current scroll offset for per-group save/restore.
+    grid.last_scroll_offset_y = visible_paths.state.offset.y;
+    grid.last_viewport_height = visible_paths.inner_rect.height();
+
+    let visible_paths = visible_paths.inner;
 
     // Lazy-load: request thumbnails for visible items.
     grid.request_thumbnails_for_paths(&visible_paths);
-
-    if app.group_drag_payload.is_some() && ctx.input(|i| i.pointer.any_released()) {
-        app.group_drag_payload = None;
-    }
 
     action
 }

@@ -32,6 +32,90 @@ impl Default for AppSettings {
 
 use crate::workspace::Workspace;
 
+#[derive(Clone)]
+pub struct TransitionAnimation {
+    pub is_opening: bool,
+    pub start_time: f64,
+    pub duration: f64,
+    pub progress: f32,
+    pub thumb_rect: Option<egui::Rect>,
+    pub canvas_image_rect: Option<egui::Rect>,
+    pub image_path: std::path::PathBuf,
+    pub frames_waiting: u32,
+}
+
+pub fn compute_target_image_rect(
+    ctx: &egui::Context,
+    view: &ViewerState,
+    playlist_grid: Option<&crate::playlist_grid::PlaylistGridState>,
+    fit_all_images_to_window: bool,
+    pixel_based_1_to_1: bool,
+    canvas_rect: egui::Rect,
+    image_path: &std::path::PathBuf,
+) -> egui::Rect {
+    let canvas_size = canvas_rect.size();
+    if canvas_size.x <= 0.0 || canvas_size.y <= 0.0 {
+        return canvas_rect;
+    }
+
+    // Check if the image resolution is known (either from loaded frames or thumbnail cache)
+    let (w, h) = if let Some(res) = view.image_resolution {
+        res
+    } else if let Some(grid) = playlist_grid {
+        if let Some(crate::playlist_grid::ThumbnailEntry::Ready { width, height, .. }) = grid.thumbnail_cache.get(image_path) {
+            (*width, *height)
+        } else {
+            (100, 100)
+        }
+    } else {
+        (100, 100)
+    };
+
+    if w == 0 || h == 0 {
+        return canvas_rect;
+    }
+
+    let image_pixels = egui::vec2(w as f32, h as f32);
+    let pixels_per_point = ctx.pixels_per_point().max(0.0001);
+    let image_size = image_pixels / pixels_per_point;
+
+    // Calculate fit scale
+    let scale_w = canvas_size.x / image_size.x;
+    let scale_h = canvas_size.y / image_size.y;
+    let fit_scale = scale_w.min(scale_h);
+
+    // Calculate actual scale (true size or 1:1)
+    let pixel_1_to_1_scale = 1.0;
+    let monitor_ppi = ctx.pixels_per_point() * 72.0;
+    let true_size_scale = view.image_density
+        .map(|density| (monitor_ppi / density.average_ppi()).clamp(0.01, 100.0))
+        .unwrap_or(pixel_1_to_1_scale);
+    let actual_scale = if pixel_based_1_to_1 {
+        pixel_1_to_1_scale
+    } else {
+        true_size_scale
+    };
+
+    let is_small_image = fit_scale > actual_scale;
+    let scale = if fit_all_images_to_window || !is_small_image {
+        fit_scale
+    } else {
+        actual_scale
+    };
+
+    let scaled_size = image_size * scale;
+    let center_offset = (canvas_size - scaled_size) / 2.0;
+    let min = canvas_rect.min + center_offset;
+    egui::Rect::from_min_size(min, scaled_size)
+}
+
+fn lerp_rect(r1: egui::Rect, r2: egui::Rect, t: f32) -> egui::Rect {
+    egui::Rect::from_min_max(
+        r1.min.lerp(r2.min, t),
+        r1.max.lerp(r2.max, t),
+    )
+}
+
 pub struct ImageApp {
     pub workspace: Workspace,
     pub settings: AppSettings,
@@ -79,6 +163,8 @@ pub struct ImageApp {
     pub group_drag_payload: Option<crate::groups::GroupDragPayload>,
     pub notifications: crate::notifications::NotificationToast,
     pub context_menu: crate::ui::context_menu::ContextMenuState,
+    pub transition_animation: Option<TransitionAnimation>,
+    pub last_central_panel_rect: egui::Rect,
     startup_open_target: Option<std::path::PathBuf>,
 }
 
@@ -172,6 +258,8 @@ impl ImageApp {
             group_drag_payload: None,
             notifications: crate::notifications::NotificationToast::new(),
             context_menu: crate::ui::context_menu::ContextMenuState::default(),
+            transition_animation: None,
+            last_central_panel_rect: egui::Rect::NOTHING,
             startup_open_target: initial_file.map(std::path::PathBuf::from),
         };
 
@@ -208,6 +296,25 @@ impl eframe::App for ImageApp {
         handlers::rebuild_adjusted_textures(self, ctx);
         handlers::process_move_animation(self, ctx);
         
+        // Check for transition animation completion before rendering UI layers.
+        // Doing this before canvas/grid drawing avoids a 1-frame blank gap (black frames).
+        if let Some(ref mut anim) = self.transition_animation {
+            if anim.start_time > 0.0 {
+                let dt = ctx.input(|i| i.stable_dt).min(0.033) as f32;
+                anim.progress = (anim.progress + dt / anim.duration as f32).min(1.0);
+
+                let is_loaded = !self.workspace.active_view().frames.is_empty() || self.workspace.active_view().load_error.is_some();
+                let elapsed = ctx.input(|i| i.time) - anim.start_time;
+                if anim.progress >= 1.0 && (!anim.is_opening || is_loaded || elapsed >= 1.0) {
+                    self.transition_animation = None;
+                }
+            } else if !anim.is_opening {
+                if anim.frames_waiting >= 10 {
+                    self.transition_animation = None;
+                }
+            }
+        }
+
         // 2. Render UI Layers
         ui::topbar::render(self, ctx);
         ui::filter_popup::render(self, ctx);
@@ -262,6 +369,7 @@ impl eframe::App for ImageApp {
                 .show(ctx, |ui| {
                     let bg = ui.visuals().window_fill();
                     let panel_rect = ui.max_rect();
+                    self.last_central_panel_rect = panel_rect;
                     ui.painter().rect_filled(panel_rect, 0.0, bg);
 
                     let tabs_height = crate::ui::group_tabs::tabs_height(self);
@@ -312,7 +420,34 @@ impl eframe::App for ImageApp {
 
             let grid_action = panel_output.inner;
             match grid_action {
-                crate::ui::playlist_grid::PlaylistGridAction::OpenImage { path, index } => {
+                crate::ui::playlist_grid::PlaylistGridAction::OpenImage { path, index, rect } => {
+                    let target_canvas_rect = if !self.workspace.is_split()
+                        && self.workspace.active_view().is_fullscreen
+                        && self.settings.immersive_maximized
+                    {
+                        ctx.content_rect()
+                    } else {
+                        self.last_central_panel_rect
+                    };
+                    let canvas_image_rect = compute_target_image_rect(
+                        ctx,
+                        self.workspace.active_view(),
+                        self.workspace.playlist_grid.as_ref(),
+                        self.settings.fit_all_images_to_window,
+                        self.settings.pixel_based_1_to_1,
+                        target_canvas_rect,
+                        &path,
+                    );
+                    self.transition_animation = Some(TransitionAnimation {
+                        is_opening: true,
+                        start_time: ctx.input(|i| i.time),
+                        duration: 0.15,
+                        progress: 0.0,
+                        thumb_rect: Some(rect),
+                        canvas_image_rect: Some(canvas_image_rect),
+                        image_path: path.clone(),
+                        frames_waiting: 0,
+                    });
                     handlers::playlist_grid_open_image(self, path, index);
                 }
                 crate::ui::playlist_grid::PlaylistGridAction::OpenFile => {
@@ -356,6 +491,7 @@ impl eframe::App for ImageApp {
             let panel_output = egui::CentralPanel::default()
                 .frame(egui::Frame::new())
                 .show(ctx, |ui| {
+                    self.last_central_panel_rect = ui.max_rect();
                     crate::ui::split_layout::render(self, ctx, ui, !has_modal_dialog)
                 });
 
@@ -490,6 +626,81 @@ impl eframe::App for ImageApp {
             painter.rect_stroke(rect, 8.0, stroke, egui::StrokeKind::Inside);
         }
 
+        // Render transition animation if active
+        if self.transition_animation.is_some() {
+            // First recalculate target canvas image rect dynamically when opening
+            let is_opening = self.transition_animation.as_ref().unwrap().is_opening;
+            if is_opening {
+                let target_canvas_rect = if !self.workspace.is_split()
+                    && self.workspace.active_view().is_fullscreen
+                    && self.settings.immersive_maximized
+                    && self.workspace.content_mode == crate::workspace::ContentMode::Canvas
+                {
+                    ctx.content_rect()
+                } else {
+                    self.last_central_panel_rect
+                };
+                let image_path = self.transition_animation.as_ref().unwrap().image_path.clone();
+                let canvas_image_rect = compute_target_image_rect(
+                    ctx,
+                    self.workspace.active_view(),
+                    self.workspace.playlist_grid.as_ref(),
+                    self.settings.fit_all_images_to_window,
+                    self.settings.pixel_based_1_to_1,
+                    target_canvas_rect,
+                    &image_path,
+                );
+                if let Some(ref mut anim) = self.transition_animation {
+                    anim.canvas_image_rect = Some(canvas_image_rect);
+                }
+            }
+        }
+
+        if let Some(ref mut anim) = self.transition_animation {
+            if anim.start_time > 0.0 {
+                let t = anim.progress;
+                let e = 1.0 - (1.0 - t).powi(3); // ease out cubic
+
+                if let (Some(thumb_rect), Some(canvas_rect)) = (anim.thumb_rect, anim.canvas_image_rect) {
+                    let current_rect = if anim.is_opening {
+                        lerp_rect(thumb_rect, canvas_rect, e)
+                    } else {
+                        lerp_rect(canvas_rect, thumb_rect, e)
+                    };
+
+                    ctx.request_repaint();
+
+                    if let Some(grid) = &self.workspace.playlist_grid {
+                        if let Some(crate::playlist_grid::ThumbnailEntry::Ready { texture, .. }) = grid.thumbnail_cache.get(&anim.image_path) {
+                            let painter = egui::Painter::new(
+                                ctx.clone(),
+                                egui::LayerId::new(egui::Order::Foreground, egui::Id::new("transition_overlay")),
+                                ctx.content_rect(),
+                            );
+
+                            if anim.is_opening {
+                                let bg = ctx.style().visuals.window_fill;
+                                let alpha = (255.0 * e) as u8;
+                                let bg_color = egui::Color32::from_rgba_unmultiplied(bg.r(), bg.g(), bg.b(), alpha);
+                                painter.rect_filled(self.last_central_panel_rect, 0.0, bg_color);
+                            }
+
+                            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                            painter.image(texture.id(), current_rect, uv, egui::Color32::WHITE);
+                        }
+                    }
+                }
+            } else if !anim.is_opening {
+                // Waiting for close layout frame
+                anim.frames_waiting += 1;
+                ctx.request_repaint();
+            }
+        }
+
+        // Clear the group drag payload at the very end of the update loop if the mouse button was released.
+        if self.group_drag_payload.is_some() && ctx.input(|i| i.pointer.any_released()) {
+            self.group_drag_payload = None;
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

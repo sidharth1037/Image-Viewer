@@ -134,6 +134,12 @@ pub struct PlaylistGridState {
     pub settings: ThumbnailSettings,
     /// Scroll offset to restore on re-entry.
     pub scroll_to_index: Option<usize>,
+    /// Pixel-exact scroll offset to restore (takes priority over scroll_to_index).
+    pub restore_scroll_offset: Option<f32>,
+    /// Last known scroll offset, captured each frame for save/restore.
+    pub last_scroll_offset_y: f32,
+    /// Last known scroll viewport height, captured each frame to determine visibility checks.
+    pub last_viewport_height: f32,
 
     pub cached_total_size_bytes: u64,
     pub cached_selected_size_bytes: u64,
@@ -158,6 +164,9 @@ impl PlaylistGridState {
             selection: PlaylistSelection::default(),
             settings: ThumbnailSettings::default(),
             scroll_to_index: None,
+            restore_scroll_offset: None,
+            last_scroll_offset_y: 0.0,
+            last_viewport_height: 0.0,
             cached_total_size_bytes: 0,
             cached_selected_size_bytes: 0,
             thumb_req_tx: req_tx,
@@ -254,6 +263,8 @@ impl PlaylistGridState {
         self.pending_requests.clear();
         self.selection.clear();
         self.scroll_to_index = None;
+        self.restore_scroll_offset = None;
+        self.last_scroll_offset_y = 0.0;
         self.cached_total_size_bytes = 0;
         self.cached_selected_size_bytes = 0;
     }

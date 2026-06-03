@@ -48,6 +48,7 @@ pub fn render(
                 true,
                 immersive_topbar_visible,
                 allow_interaction,
+                app.transition_animation.is_some(),
             );
             left_nav = nav;
             left_rect = rect;
@@ -72,6 +73,7 @@ pub fn render(
                 true,
                 immersive_topbar_visible,
                 allow_interaction,
+                app.transition_animation.is_some(),
             );
             right_nav = nav;
             right_rect = rect;
@@ -124,6 +126,7 @@ pub fn render(
             false,
             false,
             allow_interaction,
+            app.transition_animation.is_some(),
         );
         SplitLayoutResult { nav_action, active_canvas_rect: canvas_rect, context_menu_requested }
     }
