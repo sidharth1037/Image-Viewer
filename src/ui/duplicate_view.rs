@@ -227,31 +227,15 @@ pub fn render(
                                     let path = &paths_snapshot[item_idx];
                                     all_visible_paths.push(path.clone());
 
-                                    let aspect = match grid.thumbnail_cache.get(path) {
-                                        Some(ThumbnailEntry::Ready { width, height, .. }) if *width > 0 => {
-                                            *height as f32 / *width as f32
-                                        }
-                                        _ => 1.0,
-                                    };
-                                    let (item_thumb_w, item_thumb_h) = if aspect > max_height_ratio {
-                                        (max_thumb_h / aspect, max_thumb_h)
-                                    } else {
-                                        (thumb_w, thumb_w * aspect)
-                                    };
-
                                     let cell_size = egui::vec2(thumb_w + cell_pad_x * 2.0, cell_height);
                                     let (cell_rect, response) =
                                         ui.allocate_exact_size(cell_size, egui::Sense::click());
 
-                                    let thumb_y_offset = (max_thumb_h - item_thumb_h) / 2.0;
-                                    let thumb_x_offset = (thumb_w - item_thumb_w) / 2.0;
-                                    let thumb_rect = egui::Rect::from_min_size(
-                                        egui::pos2(
-                                            cell_rect.min.x + cell_pad_x + thumb_x_offset,
-                                            cell_rect.min.y + cell_pad_top + thumb_y_offset,
-                                        ),
-                                        egui::vec2(item_thumb_w, item_thumb_h),
+                                    let thumb_box = egui::Rect::from_min_size(
+                                        egui::pos2(cell_rect.min.x + cell_pad_x, cell_rect.min.y + cell_pad_top),
+                                        egui::vec2(thumb_w, max_thumb_h),
                                     );
+
                                     let label_rect = egui::Rect::from_min_size(
                                         egui::pos2(cell_rect.min.x + cell_pad_x, cell_rect.min.y + cell_pad_top + max_thumb_h),
                                         egui::vec2(thumb_w, label_h),
@@ -281,24 +265,44 @@ pub fn render(
                                         ui.painter().rect_filled(cell_rect, 4.0, hover_color);
                                     }
 
-                                    // Draw thumbnail.
-                                    match grid.thumbnail_cache.get(path) {
-                                        Some(ThumbnailEntry::Ready { texture, .. }) => {
-                                            let uv = egui::Rect::from_min_max(
-                                                egui::pos2(0.0, 0.0),
-                                                egui::pos2(1.0, 1.0),
+                                    // Retrieve thumbnail entry.
+                                    let thumb_entry = grid.thumbnail_cache.get(path);
+
+                                    // Draw thumbnail content inside thumb_box.
+                                    match thumb_entry {
+                                        Some(ThumbnailEntry::Ready { texture, width, height }) => {
+                                            let aspect = if *width > 0 {
+                                                *height as f32 / *width as f32
+                                            } else {
+                                                1.0
+                                            };
+                                            let (item_thumb_w, item_thumb_h) = if aspect > max_height_ratio {
+                                                (max_thumb_h / aspect, max_thumb_h)
+                                            } else {
+                                                (thumb_w, thumb_w * aspect)
+                                            };
+                                            // Center the image inside thumb_box.
+                                            let thumb_y_offset = (max_thumb_h - item_thumb_h) / 2.0;
+                                            let thumb_x_offset = (thumb_w - item_thumb_w) / 2.0;
+                                            let r = egui::Rect::from_min_size(
+                                                egui::pos2(thumb_box.min.x + thumb_x_offset, thumb_box.min.y + thumb_y_offset),
+                                                egui::vec2(item_thumb_w, item_thumb_h),
                                             );
-                                            ui.painter().image(
-                                                texture.id(),
-                                                thumb_rect,
-                                                uv,
-                                                egui::Color32::WHITE,
-                                             );
+                                            let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                                            ui.painter().image(texture.id(), r, uv, egui::Color32::WHITE);
                                         }
                                         Some(ThumbnailEntry::Error(_)) => {
+                                            // Outline for error state.
+                                            ui.painter().rect(
+                                                thumb_box,
+                                                4.0,
+                                                egui::Color32::TRANSPARENT,
+                                                ui.visuals().widgets.noninteractive.bg_stroke,
+                                                egui::StrokeKind::Inside,
+                                            );
                                             let icon_color = ui.visuals().error_fg_color;
                                             ui.painter().text(
-                                                thumb_rect.center(),
+                                                thumb_box.center(),
                                                 egui::Align2::CENTER_CENTER,
                                                 egui_phosphor::regular::IMAGE_BROKEN,
                                                 egui::FontId::proportional(32.0),
@@ -306,11 +310,24 @@ pub fn render(
                                             );
                                         }
                                         Some(ThumbnailEntry::Loading) | None => {
+                                            // Outline for loading state.
+                                            ui.painter().rect(
+                                                thumb_box,
+                                                4.0,
+                                                egui::Color32::TRANSPARENT,
+                                                ui.visuals().widgets.noninteractive.bg_stroke,
+                                                egui::StrokeKind::Inside,
+                                            );
                                             let spinner_rect = egui::Rect::from_center_size(
-                                                thumb_rect.center(),
+                                                thumb_box.center(),
                                                 egui::vec2(20.0, 20.0),
                                             );
-                                            ui.put(spinner_rect, egui::Spinner::new().size(16.0));
+                                            let mut child_ui = ui.new_child(
+                                                egui::UiBuilder::new()
+                                                    .max_rect(spinner_rect)
+                                                    .layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)),
+                                            );
+                                            child_ui.add(egui::Spinner::new().size(16.0));
                                         }
                                     }
 

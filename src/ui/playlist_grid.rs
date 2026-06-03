@@ -206,20 +206,21 @@ pub fn render(
                 let path = &playlist[item_idx];
                 visible_paths.push(path.clone());
 
-                let aspect = match grid.thumbnail_cache.get(path) {
-                    Some(ThumbnailEntry::Ready { width, height, .. }) if *width > 0 => {
-                        *height as f32 / *width as f32
-                    }
-                    _ => 1.0,
-                };
-                let (item_thumb_w, item_thumb_h) = if aspect > max_height_ratio {
-                    (max_thumb_h / aspect, max_thumb_h)
-                } else {
-                    (thumb_w, thumb_w * aspect)
-                };
-
-                // Position this item within the row.
                 let x = row_content_rect.min.x + gap_x + col as f32 * (thumb_w + gap_x);
+
+                // Define the fixed thumbnail bounding box.
+                let thumb_box = egui::Rect::from_min_size(
+                    egui::pos2(x, row_content_rect.min.y),
+                    egui::vec2(thumb_w, max_thumb_h),
+                );
+
+                // Define the fixed label bounding box.
+                let label_rect = egui::Rect::from_min_size(
+                    egui::pos2(x, row_content_rect.min.y + max_thumb_h),
+                    egui::vec2(thumb_w, label_h),
+                );
+
+                // Define the full cell rect for selection/hover highlights and interaction.
                 let cell_rect = egui::Rect::from_min_size(
                     egui::pos2(x - gap_x * 0.5, row_content_rect.min.y),
                     egui::vec2(thumb_w + gap_x, row_content_rect.height()),
@@ -234,25 +235,8 @@ pub fn render(
                         cell_rect.max.y + highlight_pad_bottom,
                     ),
                 );
-                // Vertically centre the thumbnail within the row's thumbnail area.
-                let thumb_y_offset = (row_thumb_h - item_thumb_h) / 2.0;
-                let thumb_x_offset = (thumb_w - item_thumb_w) / 2.0;
-                let thumb_rect = egui::Rect::from_min_size(
-                    egui::pos2(x + thumb_x_offset, row_content_rect.min.y + thumb_y_offset),
-                    egui::vec2(item_thumb_w, item_thumb_h),
-                );
-                if let Some(anim) = &mut app.transition_animation {
-                    if !anim.is_opening && anim.thumb_rect.is_none() && item_idx == active_view.current_index {
-                        anim.thumb_rect = Some(thumb_rect);
-                        anim.start_time = ui.input(|i| i.time);
-                    }
-                }
-                let label_rect = egui::Rect::from_min_size(
-                    egui::pos2(x, row_content_rect.min.y + row_thumb_h),
-                    egui::vec2(thumb_w, label_h),
-                );
                 let full_item_rect = egui::Rect::from_min_max(
-                    thumb_rect.min,
+                    thumb_box.min,
                     label_rect.max,
                 );
 
@@ -280,36 +264,80 @@ pub fn render(
                     let hover_color = egui::Color32::from_white_alpha(15);
                     ui.painter().rect_filled(highlight_rect, 4.0, hover_color);
                 }
-
-                // Draw thumbnail content.
-                match grid.thumbnail_cache.get(path) {
-                    Some(ThumbnailEntry::Ready { texture, .. }) => {
-                        let uv = egui::Rect::from_min_max(
-                            egui::pos2(0.0, 0.0),
-                            egui::pos2(1.0, 1.0),
+                // Draw thumbnail content inside thumb_box.
+                let draw_thumb_rect = match grid.thumbnail_cache.get(path) {
+                    Some(ThumbnailEntry::Ready { texture, width, height }) => {
+                        let aspect = if *width > 0 {
+                            *height as f32 / *width as f32
+                        } else {
+                            1.0
+                        };
+                        let (item_thumb_w, item_thumb_h) = if aspect > max_height_ratio {
+                            (max_thumb_h / aspect, max_thumb_h)
+                        } else {
+                            (thumb_w, thumb_w * aspect)
+                        };
+                        // Center the image inside thumb_box.
+                        let thumb_y_offset = (max_thumb_h - item_thumb_h) / 2.0;
+                        let thumb_x_offset = (thumb_w - item_thumb_w) / 2.0;
+                        let r = egui::Rect::from_min_size(
+                            egui::pos2(thumb_box.min.x + thumb_x_offset, thumb_box.min.y + thumb_y_offset),
+                            egui::vec2(item_thumb_w, item_thumb_h),
                         );
-                        ui.painter().image(texture.id(), thumb_rect, uv, egui::Color32::WHITE);
+                        let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+                        ui.painter().image(texture.id(), r, uv, egui::Color32::WHITE);
+                        r
                     }
                     Some(ThumbnailEntry::Error(_)) => {
-                        // Error icon centred in the thumbnail area.
+                        // Outline for error state.
+                        ui.painter().rect(
+                            thumb_box,
+                            4.0,
+                            egui::Color32::TRANSPARENT,
+                            ui.visuals().widgets.noninteractive.bg_stroke,
+                            egui::StrokeKind::Inside,
+                        );
                         let icon_color = ui.visuals().error_fg_color;
                         ui.painter().text(
-                            thumb_rect.center(),
+                            thumb_box.center(),
                             egui::Align2::CENTER_CENTER,
                             egui_phosphor::regular::IMAGE_BROKEN,
                             egui::FontId::proportional(32.0),
                             icon_color,
                         );
+                        thumb_box
                     }
                     Some(ThumbnailEntry::Loading) | None => {
-                        // Spinner placeholder.
+                        // Outline for loading state.
+                        ui.painter().rect(
+                            thumb_box,
+                            4.0,
+                            egui::Color32::TRANSPARENT,
+                            ui.visuals().widgets.noninteractive.bg_stroke,
+                            egui::StrokeKind::Inside,
+                        );
                         let spinner_rect = egui::Rect::from_center_size(
-                            thumb_rect.center(),
+                            thumb_box.center(),
                             egui::vec2(20.0, 20.0),
                         );
-                        ui.put(spinner_rect, egui::Spinner::new().size(16.0));
+                        let mut child_ui = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(spinner_rect)
+                                .layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)),
+                        );
+                        child_ui.add(egui::Spinner::new().size(16.0));
+                        thumb_box
+                    }
+                };
+
+                if let Some(anim) = &mut app.transition_animation {
+                    if !anim.is_opening && anim.thumb_rect.is_none() && item_idx == active_view.current_index {
+                        anim.thumb_rect = Some(draw_thumb_rect);
+                        anim.start_time = ui.input(|i| i.time);
                     }
                 }
+
+
 
                 // Draw filename label.
                 let file_name = path
@@ -399,7 +427,7 @@ pub fn render(
                     action = PlaylistGridAction::OpenImage {
                         path: path.clone(),
                         index: item_idx,
-                        rect: thumb_rect,
+                        rect: draw_thumb_rect,
                     };
                 } else if response.clicked() {
                     let modifiers = ui.input(|i| i.modifiers);
