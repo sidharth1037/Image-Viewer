@@ -166,6 +166,10 @@ pub struct ImageApp {
     pub transition_animation: Option<TransitionAnimation>,
     pub last_central_panel_rect: egui::Rect,
     startup_open_target: Option<std::path::PathBuf>,
+    /// Files placed on clipboard via "Cut" — polled for disappearance to auto-refresh.
+    pub clipboard_cut_paths: Vec<std::path::PathBuf>,
+    /// Timestamp of last cut-file existence poll (throttle to ~500ms).
+    pub clipboard_cut_last_poll: f64,
 }
 
 impl ImageApp {
@@ -261,6 +265,8 @@ impl ImageApp {
             transition_animation: None,
             last_central_panel_rect: egui::Rect::NOTHING,
             startup_open_target: initial_file.map(std::path::PathBuf::from),
+            clipboard_cut_paths: Vec::new(),
+            clipboard_cut_last_poll: 0.0,
         };
 
         app
@@ -284,6 +290,7 @@ impl eframe::App for ImageApp {
         handlers::handle_keyboard(self, ctx);
         handlers::process_image_loading(self, ctx);
         handlers::process_directory_scanning(self);
+        handlers::process_cut_file_polling(self, ctx);
         handlers::process_duplicate_scanning(self, ctx);
         if self.workspace.active_view().scanning_in_progress {
             ctx.request_repaint();

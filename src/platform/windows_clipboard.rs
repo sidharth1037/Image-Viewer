@@ -11,14 +11,29 @@ pub fn copy_files_to_clipboard(paths: &[PathBuf]) -> Result<(), String> {
     if paths.is_empty() {
         return Ok(());
     }
-    copy_via_dropfiles(paths)
+    copy_via_dropfiles(paths, None)
+}
+
+/// Cut one or more files to the Windows clipboard.
+/// Sets `Preferred DropEffect = DROPEFFECT_MOVE` so that pasting in Explorer
+/// **moves** the files instead of copying them (exactly like Ctrl+X in Explorer).
+pub fn cut_files_to_clipboard(paths: &[PathBuf]) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    // DROPEFFECT_MOVE = 0x02
+    copy_via_dropfiles(paths, Some(0x02u32))
 }
 
 /// Use the classic DROPFILES clipboard format (CF_HDROP = 15).
 /// This works for files from any combination of folders.
-fn copy_via_dropfiles(paths: &[PathBuf]) -> Result<(), String> {
+/// When `preferred_drop_effect` is `Some(effect)`, also writes a
+/// `"Preferred DropEffect"` clipboard format so the receiver (e.g. Explorer)
+/// knows whether to copy or move.
+fn copy_via_dropfiles(paths: &[PathBuf], preferred_drop_effect: Option<u32>) -> Result<(), String> {
     use windows::Win32::System::DataExchange::{
-        CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
+        CloseClipboard, EmptyClipboard, OpenClipboard, RegisterClipboardFormatA,
+        SetClipboardData,
     };
     use windows::Win32::System::Memory::{
         GlobalAlloc, GlobalLock, GlobalUnlock, GLOBAL_ALLOC_FLAGS,
@@ -84,6 +99,25 @@ fn copy_via_dropfiles(paths: &[PathBuf]) -> Result<(), String> {
         // CF_HDROP = 15
         let handle = windows::Win32::Foundation::HANDLE(hglobal.0);
         let result = SetClipboardData(15, Some(handle));
+
+        // Optionally set the Preferred DropEffect (e.g. DROPEFFECT_MOVE for cut).
+        if let Some(effect) = preferred_drop_effect {
+            let fmt_name = windows::core::PCSTR(b"Preferred DropEffect\0".as_ptr());
+            let cf = RegisterClipboardFormatA(fmt_name);
+            if cf != 0 {
+                let effect_size = std::mem::size_of::<u32>();
+                if let Ok(heffect) = GlobalAlloc(GLOBAL_ALLOC_FLAGS(0x0042), effect_size) {
+                    let eptr = GlobalLock(heffect);
+                    if !eptr.is_null() {
+                        *(eptr as *mut u32) = effect;
+                        let _ = GlobalUnlock(heffect);
+                        let ehandle = windows::Win32::Foundation::HANDLE(heffect.0);
+                        let _ = SetClipboardData(cf, Some(ehandle));
+                    }
+                }
+            }
+        }
+
         let _ = CloseClipboard();
 
         if result.is_err() {

@@ -519,6 +519,22 @@ fn copy_shortcut_pressed(
     false
 }
 
+fn cut_shortcut_pressed(
+    input: &egui::InputState,
+    shortcut: crate::shortcuts::Shortcut,
+) -> bool {
+    if shortcut.is_pressed(input) {
+        return true;
+    }
+
+    // Standard cut key event (Ctrl+X or Cmd+X) may be consumed by egui and emitted as Event::Cut
+    if input.events.iter().any(|event| matches!(event, egui::Event::Cut)) {
+        return true;
+    }
+
+    false
+}
+
 fn is_group_restricted(app: &ImageApp) -> bool {
     app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid
         && app.workspace.group_tabs.selected_id != crate::groups::DEFAULT_GROUP_ID
@@ -1534,6 +1550,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             return;
         }
 
+        if ctx.input(|i| cut_shortcut_pressed(i, shortcuts.cut_files)) {
+            dispatch_context_menu_action(app, ctx, &crate::ui::context_menu::ContextMenuAction { id: "cut_files" });
+            return;
+        }
+
         if close_window {
             set_overlay_message(app, time, "Shortcut: Close window");
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1613,6 +1634,11 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
             return;
         }
 
+        if ctx.input(|i| cut_shortcut_pressed(i, shortcuts.cut_files)) {
+            dispatch_context_menu_action(app, ctx, &crate::ui::context_menu::ContextMenuAction { id: "cut_files" });
+            return;
+        }
+
         if close_window {
             set_overlay_message(app, time, "Shortcut: Close window");
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1643,6 +1669,10 @@ pub fn handle_keyboard(app: &mut ImageApp, ctx: &egui::Context) {
 
     if ctx.input(|i| copy_shortcut_pressed(i, shortcuts.copy_files)) {
         dispatch_context_menu_action(app, ctx, &crate::ui::context_menu::ContextMenuAction { id: "copy_files" });
+    }
+
+    if ctx.input(|i| cut_shortcut_pressed(i, shortcuts.cut_files)) {
+        dispatch_context_menu_action(app, ctx, &crate::ui::context_menu::ContextMenuAction { id: "cut_files" });
     }
 
     if clear_view {
@@ -2827,6 +2857,147 @@ pub fn switch_duplicate_tab(app: &mut ImageApp, scan_type: crate::duplicate_type
     }
 }
 
+// ── Cut File Auto-Refresh ───────────────────────────────────────────────────
+
+/// Poll the first cut file to detect when Explorer finishes moving the files.
+/// When the sentinel file disappears, check all cut paths, remove the ones that
+/// are gone from playlists/thumbnails, and trigger a directory rescan.
+pub fn process_cut_file_polling(app: &mut ImageApp, ctx: &egui::Context) {
+    if app.clipboard_cut_paths.is_empty() {
+        return;
+    }
+
+    let time = ctx.input(|i| i.time);
+
+    // Throttle: poll at most every ~500ms.
+    if time - app.clipboard_cut_last_poll < 0.5 {
+        // Request a repaint so we get called again soon.
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        return;
+    }
+    app.clipboard_cut_last_poll = time;
+
+    // Only poll the first file as a sentinel — all cut files are moved together.
+    let sentinel = &app.clipboard_cut_paths[0];
+    if sentinel.exists() {
+        // Sentinel still exists — files haven't been pasted/moved yet.
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        return;
+    }
+
+    // Sentinel is gone — Explorer moved the files. Check all paths to handle
+    // partial failures (rare but possible).
+    let cut_paths = std::mem::take(&mut app.clipboard_cut_paths);
+    let moved: Vec<std::path::PathBuf> = cut_paths.into_iter().filter(|p| !p.exists()).collect();
+
+    if moved.is_empty() {
+        return;
+    }
+
+    let active_group_id = app.workspace.group_tabs.selected_id;
+
+    // 1. Snapshot the current view state into the group store.
+    {
+        let current_view_state =
+            crate::groups::GroupPlaylistState::from_view(app.workspace.active_view());
+        app.workspace
+            .group_tabs
+            .set_group_playlist(active_group_id, current_view_state);
+    }
+
+    // 2. Patch every group's stored playlist — remove moved paths.
+    let all_group_ids: Vec<u32> = {
+        let mut ids = vec![crate::groups::DEFAULT_GROUP_ID];
+        ids.extend(app.workspace.group_tabs.user_groups.iter().map(|g| g.id));
+        ids
+    };
+
+    for group_id in &all_group_ids {
+        if let Some(state) = app.workspace.group_tabs.group_playlist_mut(*group_id) {
+            let before = state.source_playlist.len();
+            state.source_playlist.retain(|p| !moved.iter().any(|m| m == p));
+            if state.source_playlist.len() != before {
+                state.rebuild_active_playlist();
+            }
+        }
+    }
+
+    // 3. Re-apply the patched active group state to the live view.
+    if let Some(patched_state) = app
+        .workspace
+        .group_tabs
+        .group_playlist(active_group_id)
+        .cloned()
+    {
+        apply_group_playlist_state(app, &patched_state);
+    }
+
+    // 4. Evict moved paths from the thumbnail cache.
+    {
+        let playlist_snapshot = app.workspace.active_view().active_playlist.clone();
+        if let Some(grid) = app.workspace.playlist_grid.as_mut() {
+            for path in &moved {
+                grid.thumbnail_cache.remove(path);
+                grid.pending_requests.remove(path);
+            }
+            grid.refresh_total_size_cache(&playlist_snapshot);
+        }
+    }
+
+    // 5. Update duplicate finder groups if initialized.
+    if let Some(dup_state) = app.workspace.duplicate_finder.as_mut() {
+        dup_state.remove_paths_all(&moved);
+    }
+
+    // 6. Trigger a directory rescan for the default group.
+    let is_default_group = active_group_id == crate::groups::DEFAULT_GROUP_ID;
+    if is_default_group {
+        if let Some(scan_target) = app
+            .workspace
+            .active_view()
+            .current_folder
+            .clone()
+            .map(|folder| folder.join("__cut_refresh__"))
+        {
+            request_directory_scan(app, scan_target);
+        }
+    }
+
+    // 7. If the current canvas image was among the moved files, navigate away.
+    if app.workspace.content_mode == crate::workspace::ContentMode::Canvas {
+        if let Some(current_path) = app.workspace.active_view().current_file_path.as_ref() {
+            if moved.iter().any(|m| m == current_path) {
+                // The currently displayed file was moved out — load the next available image.
+                let playlist = app.workspace.active_view().active_playlist.clone();
+                let idx = app.workspace.active_view().current_index;
+                if !playlist.is_empty() {
+                    let new_idx = idx.min(playlist.len() - 1);
+                    let new_path = playlist[new_idx].clone();
+                    app.workspace.active_view_mut().current_index = new_idx;
+                    load_target_file(app, new_path);
+                } else {
+                    // Playlist is empty after the move.
+                    let view_index = app.workspace.active_view_index;
+                    clear_current_view_for_empty_playlist(app, view_index);
+                }
+            }
+        }
+    }
+
+    // 8. Overlay message.
+    let text = if moved.len() == 1 {
+        let name = moved[0]
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| moved[0].to_string_lossy().into_owned());
+        format!("Moved {}", name)
+    } else {
+        format!("Moved {} files", moved.len())
+    };
+    set_overlay_message(app, time, &text);
+    ctx.request_repaint();
+}
+
 // ── Context Menu ────────────────────────────────────────────────────────────
 
 /// Open the context menu at the given position with view-appropriate items.
@@ -3021,6 +3192,9 @@ pub fn dispatch_context_menu_action(
             };
 
             if !paths.is_empty() {
+                // A regular copy invalidates any pending cut state.
+                app.clipboard_cut_paths.clear();
+
                 #[cfg(windows)]
                 {
                     match crate::platform::windows_clipboard::copy_files_to_clipboard(&paths) {
@@ -3040,6 +3214,62 @@ pub fn dispatch_context_menu_action(
                 #[cfg(not(windows))]
                 {
                     set_overlay_message(app, time, "File copy is only available on Windows");
+                }
+            }
+        }
+
+        "cut_files" => {
+            let is_playlist = app.workspace.content_mode == crate::workspace::ContentMode::PlaylistGrid;
+            let is_duplicate = app.workspace.content_mode == crate::workspace::ContentMode::DuplicateFinder;
+
+            let paths: Vec<std::path::PathBuf> = if is_playlist {
+                app.workspace.playlist_grid.as_ref()
+                    .map(|grid| {
+                        grid.selection.selected.iter()
+                            .filter_map(|&idx| app.workspace.active_view().active_playlist.get(idx).cloned())
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else if is_duplicate {
+                app.workspace.duplicate_finder.as_ref()
+                    .map(|dup_state| {
+                        dup_state.active_scan().groups.iter()
+                            .flat_map(|group| {
+                                group.selection.selected.iter()
+                                    .filter_map(|&idx| group.paths.get(idx).cloned())
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            } else {
+                // Canvas: cut the current file.
+                app.workspace.active_view().current_file_path.as_ref()
+                    .map(|p| vec![p.clone()])
+                    .unwrap_or_default()
+            };
+
+            if !paths.is_empty() {
+                #[cfg(windows)]
+                {
+                    match crate::platform::windows_clipboard::cut_files_to_clipboard(&paths) {
+                        Ok(()) => {
+                            let msg = if paths.len() == 1 {
+                                "Cut image to clipboard".to_string()
+                            } else {
+                                format!("Cut {} items to clipboard", paths.len())
+                            };
+                            set_overlay_message(app, time, &msg);
+                            app.clipboard_cut_paths = paths;
+                            app.clipboard_cut_last_poll = time;
+                        }
+                        Err(e) => {
+                            set_overlay_message(app, time, &format!("Cut failed: {}", e));
+                        }
+                    }
+                }
+                #[cfg(not(windows))]
+                {
+                    set_overlay_message(app, time, "File cut is only available on Windows");
                 }
             }
         }

@@ -56,6 +56,14 @@ pub fn canvas_items(app: &ImageApp) -> Vec<ContextMenuEntry> {
         id: "copy_files",
     }));
 
+    entries.push(ContextMenuEntry::Item(ContextMenuItem {
+        icon: icons::SCISSORS,
+        label: "Cut Image".into(),
+        shortcut_hint: Some("Ctrl+X"),
+        enabled: has_file,
+        id: "cut_files",
+    }));
+
     entries.push(ContextMenuEntry::Separator);
 
     entries.push(ContextMenuEntry::Item(ContextMenuItem {
@@ -113,6 +121,14 @@ pub fn playlist_items(app: &ImageApp) -> Vec<ContextMenuEntry> {
         shortcut_hint: Some("Ctrl+C"),
         enabled: has_selection,
         id: "copy_files",
+    }));
+
+    entries.push(ContextMenuEntry::Item(ContextMenuItem {
+        icon: icons::SCISSORS,
+        label: cut_files_label(selection_count),
+        shortcut_hint: Some("Ctrl+X"),
+        enabled: has_selection,
+        id: "cut_files",
     }));
 
     entries.push(ContextMenuEntry::Separator);
@@ -188,6 +204,14 @@ pub fn duplicate_items(app: &ImageApp) -> Vec<ContextMenuEntry> {
         id: "copy_files",
     }));
 
+    entries.push(ContextMenuEntry::Item(ContextMenuItem {
+        icon: icons::SCISSORS,
+        label: cut_files_label(selection_count),
+        shortcut_hint: Some("Ctrl+X"),
+        enabled: has_selection,
+        id: "cut_files",
+    }));
+
     entries.push(ContextMenuEntry::Separator);
 
     entries.push(ContextMenuEntry::Item(ContextMenuItem {
@@ -206,5 +230,13 @@ fn copy_files_label(count: usize) -> String {
     match count {
         0 | 1 => "Copy Image".into(),
         n => format!("Copy {} Items", n),
+    }
+}
+
+/// Build a user-friendly label for the cut files action based on selection count.
+fn cut_files_label(count: usize) -> String {
+    match count {
+        0 | 1 => "Cut Image".into(),
+        n => format!("Cut {} Items", n),
     }
 }
